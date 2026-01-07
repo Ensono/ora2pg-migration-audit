@@ -1,0 +1,135 @@
+using System.Text;
+using Ora2PgSchemaComparer.Comparison;
+
+namespace Ora2PgSchemaComparer.Report;
+
+
+public class SchemaComparisonMarkdownWriter
+{
+    public void WriteMarkdownReport(ComparisonResult result, string outputPath)
+    {
+        var markdown = GenerateMarkdown(result);
+        File.WriteAllText(outputPath, markdown);
+    }
+
+    private string GenerateMarkdown(ComparisonResult result)
+    {
+        var sb = new StringBuilder();
+
+        sb.AppendLine("# Oracle to PostgreSQL Schema Comparison Report");
+        sb.AppendLine();
+        sb.AppendLine("## Metadata");
+        sb.AppendLine();
+        sb.AppendLine($"- **Source (Oracle):** {result.OracleSchema.SchemaName} schema");
+        sb.AppendLine($"- **Target (PostgreSQL):** {result.PostgresSchema.SchemaName} schema");
+        sb.AppendLine($"- **Comparison Date:** {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        sb.AppendLine($"- **Overall Grade:** {result.OverallGrade}");
+        sb.AppendLine();
+
+        sb.AppendLine("## Executive Summary");
+        sb.AppendLine();
+        
+        var statusIcon = result.HasCriticalIssues ? "❌" : "✅";
+        var statusText = result.HasCriticalIssues ? "FAILED" : "PASSED";
+        sb.AppendLine($"**Status:** {statusIcon} {statusText}");
+        sb.AppendLine();
+
+        sb.AppendLine("### Schema Overview");
+        sb.AppendLine();
+        sb.AppendLine("| Object Type | Oracle | PostgreSQL | Match |");
+        sb.AppendLine("|------------|--------|------------|-------|");
+        
+        var tablesMatch = result.OracleSchema.TableCount == result.PostgresSchema.TableCount ? "✅" : "❌";
+        var columnsMatch = result.OracleSchema.ColumnCount == result.PostgresSchema.ColumnCount ? "✅" : "❌";
+        var pksMatch = result.OracleSchema.PrimaryKeyCount == result.PostgresSchema.PrimaryKeyCount ? "✅" : "❌";
+        var fksMatch = result.OracleSchema.ForeignKeyCount == result.PostgresSchema.ForeignKeyCount ? "✅" : "❌";
+        
+        sb.AppendLine($"| Tables | {result.OracleSchema.TableCount} | {result.PostgresSchema.TableCount} | {tablesMatch} |");
+        sb.AppendLine($"| Columns | {result.OracleSchema.ColumnCount} | {result.PostgresSchema.ColumnCount} | {columnsMatch} |");
+        sb.AppendLine($"| Primary Keys | {result.OracleSchema.PrimaryKeyCount} | {result.PostgresSchema.PrimaryKeyCount} | {pksMatch} |");
+        sb.AppendLine($"| Foreign Keys | {result.OracleSchema.ForeignKeyCount} | {result.PostgresSchema.ForeignKeyCount} | {fksMatch} |");
+        sb.AppendLine();
+
+        sb.AppendLine("### Issues Summary");
+        sb.AppendLine();
+        sb.AppendLine("| Category | Count |");
+        sb.AppendLine("|----------|-------|");
+        sb.AppendLine($"| Table Issues | {result.TableIssues.Count} |");
+        sb.AppendLine($"| Constraint Issues | {result.ConstraintIssues.Count} |");
+        sb.AppendLine($"| Index Issues | {result.IndexIssues.Count} |");
+        sb.AppendLine($"| Code Object Issues | {result.CodeObjectIssues.Count} |");
+        sb.AppendLine($"| **Total Issues** | **{result.TotalIssues}** |");
+        sb.AppendLine();
+
+        if (result.TotalIssues > 0)
+        {
+            sb.AppendLine("## Detailed Issues");
+            sb.AppendLine();
+
+            if (result.TableIssues.Any())
+            {
+                sb.AppendLine("### Table Issues");
+                sb.AppendLine();
+                foreach (var issue in result.TableIssues)
+                {
+                    sb.AppendLine($"- {EscapeMarkdown(issue)}");
+                }
+                sb.AppendLine();
+            }
+
+            if (result.ConstraintIssues.Any())
+            {
+                sb.AppendLine("### Constraint Issues");
+                sb.AppendLine();
+                foreach (var issue in result.ConstraintIssues)
+                {
+                    sb.AppendLine($"- {EscapeMarkdown(issue)}");
+                }
+                sb.AppendLine();
+            }
+
+            if (result.IndexIssues.Any())
+            {
+                sb.AppendLine("### Index Issues");
+                sb.AppendLine();
+                foreach (var issue in result.IndexIssues)
+                {
+                    sb.AppendLine($"- {EscapeMarkdown(issue)}");
+                }
+                sb.AppendLine();
+            }
+
+            if (result.CodeObjectIssues.Any())
+            {
+                sb.AppendLine("### Code Object Issues");
+                sb.AppendLine();
+                foreach (var issue in result.CodeObjectIssues)
+                {
+                    sb.AppendLine($"- {EscapeMarkdown(issue)}");
+                }
+                sb.AppendLine();
+            }
+        }
+        else
+        {
+            sb.AppendLine("## ✅ No Issues Found");
+            sb.AppendLine();
+            sb.AppendLine("All schema objects have been successfully migrated from Oracle to PostgreSQL with no discrepancies.");
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.AppendLine($"*Report generated on {DateTime.Now:yyyy-MM-dd HH:mm:ss}*");
+
+        return sb.ToString();
+    }
+
+    private string EscapeMarkdown(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text;
+
+        return text.Replace("|", "\\|");
+    }
+}
