@@ -12,7 +12,7 @@ runs:
       shell: sh
 
     - name: Test
-      run: dotnet test src/ora2pg-migration-audit.sln --no-restore --verbosity normal --logger "junit;LogFileName=results.xml" --collect "XPlat Code Coverage"
+      run: dotnet test src/ora2pg-migration-audit.sln --no-restore --verbosity normal --logger "junit;LogFileName=results.xml" --collect "XPlat Code Coverage" -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
       shell: sh
       continue-on-error: true
 
@@ -27,7 +27,17 @@ runs:
           npx junit-to-ctrf $TEST/TestResults/results.xml -o TestResults/$TEST.json
           npx github-actions-ctrf --exit-on-fail --title $TEST TestResults/$TEST.json
         done
-        dotnet tool run dotnet-coverage merge "**/coverage.cobertura.xml" --output coverage.xml --output-format cobertura
+        
+        # Find all cobertura coverage files and merge them
+        find . -name "coverage.cobertura.xml" -print
+        dotnet tool run dotnet-coverage merge "**/coverage.cobertura.xml" --output coverage.cobertura.xml --output-format cobertura
+        
+        # Use reportgenerator to create a proper merged report
+        dotnet tool install -g dotnet-reportgenerator-globaltool || true
+        reportgenerator -reports:"**/coverage.cobertura.xml" -targetdir:"coveragereport" -reporttypes:"Cobertura" -assemblyfilters:"+*"
+        
+        # Copy the merged report to coverage.xml
+        cp coveragereport/Cobertura.xml coverage.xml
       shell: sh
 
     - name: Generate code coverage
