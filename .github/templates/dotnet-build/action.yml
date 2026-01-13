@@ -7,6 +7,11 @@ runs:
       run: dotnet restore src/ora2pg-migration-audit.sln
       shell: sh
 
+    - name: Restore Tools
+      working-directory: src
+      run: dotnet tool restore
+      shell: sh
+
     - name: Build
       run: dotnet build src/ora2pg-migration-audit.sln --no-restore --configuration Release --verbosity minimal
       shell: sh
@@ -16,31 +21,10 @@ runs:
       shell: sh
       continue-on-error: true
 
-    - name: Publish test reports
+    - name: Merge code coverage
       working-directory: src
       run: |
-        echo "## Test Results" >> $GITHUB_STEP_SUMMARY
-        
-        # Find and parse all results.xml files
-        for result_file in $(find . -name "results.xml"); do
-          if [ -f "$result_file" ]; then
-            # Extract test statistics from JUnit XML
-            total=$(grep -oP 'tests="\K[^"]+' "$result_file" | head -1)
-            failures=$(grep -oP 'failures="\K[^"]+' "$result_file" | head -1)
-            errors=$(grep -oP 'errors="\K[^"]+' "$result_file" | head -1)
-            skipped=$(grep -oP 'skipped="\K[^"]+' "$result_file" | head -1)
-            
-            # Calculate passed tests
-            passed=$((total - failures - errors - skipped))
-            
-            # Output formatted results
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Total Tests:** $total" >> $GITHUB_STEP_SUMMARY
-            echo "- ✅ **Passed:** $passed" >> $GITHUB_STEP_SUMMARY
-            echo "- ❌ **Failed:** $((failures + errors))" >> $GITHUB_STEP_SUMMARY
-            echo "- ⏭️ **Skipped:** $skipped" >> $GITHUB_STEP_SUMMARY
-          fi
-        done
+        dotnet-coverage merge **/*.cobertura.xml --recursive --output coverage.xml --output-format cobertura
       shell: sh
 
     - name: Generate code coverage
