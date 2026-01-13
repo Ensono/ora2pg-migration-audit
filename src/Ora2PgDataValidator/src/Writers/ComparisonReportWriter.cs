@@ -1,7 +1,7 @@
 using Serilog;
 using Ora2PgDataValidator.Comparison;
 
-namespace Ora2PgDataValidator.Report;
+namespace Ora2PgDataValidator.src.Writers;
 
 public class ComparisonReportWriter
 {

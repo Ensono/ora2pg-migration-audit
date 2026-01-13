@@ -1,8 +1,8 @@
 using System.Text;
-using Ora2Pg.Common.Reports;
+using Ora2Pg.Common.Writers;
 using Ora2PgSchemaComparer.Comparison;
 
-namespace Ora2PgSchemaComparer.Report;
+namespace Ora2PgSchemaComparer.src.Writers;
 
 
 public class SchemaComparisonHtmlWriter : BaseHtmlReportWriter

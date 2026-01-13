@@ -4,7 +4,7 @@ using CsvHelper.Configuration;
 using Serilog;
 using Ora2Pg.Common.Config;
 
-namespace Ora2PgDataValidator.Report;
+namespace Ora2PgDataValidator.src.Writers;
 
 
 public class CsvHashWriter

@@ -2,9 +2,9 @@
 using Ora2Pg.Common.Connection;
 using Ora2PgRowCountValidator.Extractors;
 using Ora2PgRowCountValidator.Comparison;
-using Ora2PgRowCountValidator.Reports;
 using Serilog;
 using System.Diagnostics;
+using Ora2PgRowCountValidator.src.Writers;
 
 namespace Ora2PgRowCountValidator;
 

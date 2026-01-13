@@ -1,7 +1,7 @@
 using System.Text;
 using Ora2PgSchemaComparer.Comparison;
 
-namespace Ora2PgSchemaComparer.Report;
+namespace Ora2PgSchemaComparer.src.Writers;
 
 
 public class SchemaComparisonMarkdownWriter

@@ -1,8 +1,8 @@
 ﻿using Ora2Pg.Common.Config;
 using Ora2Pg.Common.Connection;
 using Ora2PgDataTypeValidator.Extractors;
+using Ora2PgDataTypeValidator.src.Writers;
 using Ora2PgDataTypeValidator.Validators;
-using Ora2PgDataTypeValidator.Reports;
 using Serilog;
 
 Log.Logger = new LoggerConfiguration()

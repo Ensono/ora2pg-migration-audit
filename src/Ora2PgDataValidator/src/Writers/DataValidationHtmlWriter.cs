@@ -1,8 +1,8 @@
 using System.Text;
-using Ora2Pg.Common.Reports;
+using Ora2Pg.Common.Writers;
 using Ora2PgDataValidator.Comparison;
 
-namespace Ora2PgDataValidator.Report;
+namespace Ora2PgDataValidator.src.Writers;
 
 public class DataValidationHtmlWriter : BaseHtmlReportWriter
 {

@@ -4,7 +4,7 @@ using Ora2Pg.Common.Config;
 using Ora2Pg.Common.Connection;
 using Ora2PgSchemaComparer.Extractor;
 using Ora2PgSchemaComparer.Comparison;
-using Ora2PgSchemaComparer.Report;
+using Ora2PgSchemaComparer.src.Writers;
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()

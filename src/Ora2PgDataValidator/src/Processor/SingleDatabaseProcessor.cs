@@ -3,7 +3,7 @@ using Ora2Pg.Common.Config;
 using Ora2Pg.Common.Connection;
 using Ora2PgDataValidator.Extractor;
 using Ora2PgDataValidator.Hasher;
-using Ora2PgDataValidator.Report;
+using Ora2PgDataValidator.src.Writers;
 
 namespace Ora2PgDataValidator.Processor;
 
