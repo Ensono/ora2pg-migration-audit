@@ -24,7 +24,7 @@ runs:
     - name: Merge code coverage
       working-directory: src
       run: |
-        dotnet-coverage merge **/*.cobertura.xml --recursive --output coverage.xml --output-format cobertura
+        dotnet dotnet-coverage merge **/*.cobertura.xml --recursive --output coverage.xml --output-format cobertura
       shell: sh
 
     - name: Generate code coverage
