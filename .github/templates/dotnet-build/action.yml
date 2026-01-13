@@ -1,0 +1,50 @@
+name: Unit, Component and Integration Tests
+description: Run unit, component and integration tests
+runs:
+  using: 'composite'
+  steps:
+    - name: Restore Dependencies
+      run: dotnet restore src/ora2pg-migration-audit.sln
+      shell: sh
+
+    - name: Restore Tools
+      working-directory: src
+      run: dotnet tool restore
+      shell: sh
+
+    - name: Build
+      run: dotnet build src/ora2pg-migration-audit.sln --no-restore --configuration Release --verbosity minimal
+      shell: sh
+
+    - name: Test
+      run: dotnet test src/ora2pg-migration-audit.sln --no-restore --verbosity normal --logger "junit;LogFileName=results.xml" --collect "XPlat Code Coverage"
+      shell: sh
+      continue-on-error: true
+
+    - name: Publish test reports
+      working-directory: src
+      run: |
+        dotnet tool restore
+
+        TEST_FOLDERS=$(find . -type f -name "results.xml" -exec dirname {} \; | xargs -I {} dirname {} | xargs -I {} basename {})
+
+        for TEST in $TEST_FOLDERS; do
+          npx junit-to-ctrf $TEST/TestResults/results.xml -o TestResults/$TEST.json
+          npx github-actions-ctrf --exit-on-fail --title $TEST TestResults/$TEST.json
+        done
+        dotnet tool run dotnet-coverage merge coverage.cobertura.xml --recursive --output coverage.xml --output-format cobertura
+      shell: sh
+
+    - name: Generate code coverage
+      uses: irongut/CodeCoverageSummary@v1.3.0
+      with:
+        filename: "src/coverage.xml"
+        format: markdown
+        output: both
+
+    - name: Publish code coverage
+      run: |
+        echo "## Code Coverage" >> $GITHUB_STEP_SUMMARY
+        cat code-coverage-results.md >> $GITHUB_STEP_SUMMARY
+      shell: sh
+

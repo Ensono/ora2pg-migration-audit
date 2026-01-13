@@ -8,6 +8,7 @@ obj/
 
 # IDE files
 .vscode/
+.vs/
 .idea/
 
 # Logs and Reports
