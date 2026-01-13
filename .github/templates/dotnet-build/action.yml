@@ -27,7 +27,7 @@ runs:
           npx junit-to-ctrf $TEST/TestResults/results.xml -o TestResults/$TEST.json
           npx github-actions-ctrf --exit-on-fail --title $TEST TestResults/$TEST.json
         done
-        dotnet tool run dotnet-coverage merge coverage.cobertura.xml --recursive --output coverage.xml --output-format cobertura
+        dotnet tool run dotnet-coverage merge "**/coverage.cobertura.xml" --output coverage.xml --output-format cobertura
       shell: sh
 
     - name: Generate code coverage
