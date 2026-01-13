@@ -1,4 +1,3 @@
-using System.Data;
 using Serilog;
 using Ora2Pg.Common.Config;
 using Ora2Pg.Common.Connection;

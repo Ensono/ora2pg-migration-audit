@@ -1,4 +1,3 @@
-using System.Data;
 using Npgsql;
 using Serilog;
 using Ora2Pg.Common.Connection;

@@ -1,4 +1,3 @@
-using System.Data;
 using Oracle.ManagedDataAccess.Client;
 using Serilog;
 using Ora2Pg.Common.Connection;
