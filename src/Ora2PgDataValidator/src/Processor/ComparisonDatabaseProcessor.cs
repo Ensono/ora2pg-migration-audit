@@ -1,10 +1,11 @@
+using System.Data;
 using Serilog;
 using Ora2Pg.Common.Config;
 using Ora2Pg.Common.Connection;
 using Ora2PgDataValidator.Extractor;
 using Ora2PgDataValidator.Hasher;
-using Ora2PgDataValidator.Comparison;
 using Ora2PgDataValidator.src.Writers;
+using Ora2PgDataValidator.Comparison;
 
 namespace Ora2PgDataValidator.Processor;
 
@@ -29,7 +30,7 @@ public class ComparisonDatabaseProcessor
         _fetchSize = props.GetInt("FETCH_SIZE", props.GetInt("fetch.size", 1000));
     }
 
-    
+
     public void ProcessAndCompareTables(Dictionary<string, string> tableMapping)
     {
         Log.Information("");
@@ -58,7 +59,7 @@ public class ComparisonDatabaseProcessor
 
             Log.Information("");
             Log.Information(new string('-', 80));
-            Log.Information("Comparing: {OracleTable} (Oracle) ↔ {PostgresTable} (PostgreSQL)", 
+            Log.Information("Comparing: {OracleTable} (Oracle) ↔ {PostgresTable} (PostgreSQL)",
                            oracleTable, postgresTable);
             Log.Information(new string('-', 80));
 
@@ -84,7 +85,7 @@ public class ComparisonDatabaseProcessor
             catch (Exception ex)
             {
                 failCount++;
-                Log.Error(ex, "✗ Failed to compare tables: {OracleTable} ↔ {PostgresTable}", 
+                Log.Error(ex, "✗ Failed to compare tables: {OracleTable} ↔ {PostgresTable}",
                          oracleTable, postgresTable);
                 var errorResult = new ComparisonResult(oracleTable, postgresTable)
                 {
@@ -131,7 +132,7 @@ public class ComparisonDatabaseProcessor
         Log.Information(new string('=', 80));
     }
 
-    
+
     private ComparisonResult ProcessTablePair(string oracleTable, string postgresTable)
     {
         var result = new ComparisonResult(oracleTable, postgresTable);
@@ -153,11 +154,11 @@ public class ComparisonDatabaseProcessor
             _csvWriter.WriteTableHashes(postgresTable, "PostgreSQL", postgresHashes);
 
             Log.Information("  Comparing hash values...");
-            CompareHashes(oracleHashes, postgresHashes, oracleRows, postgresRows, 
+            CompareHashes(oracleHashes, postgresHashes, oracleRows, postgresRows,
                          oracleMetadata, postgresMetadata, result);
 
-            result.IsMatch = result.MismatchedRows == 0 && 
-                           result.MissingInTarget == 0 && 
+            result.IsMatch = result.MismatchedRows == 0 &&
+                           result.MissingInTarget == 0 &&
                            result.ExtraInTarget == 0;
         }
         catch (Exception ex)
@@ -170,7 +171,7 @@ public class ComparisonDatabaseProcessor
     }
 
 
-    private (Dictionary<string, string> hashes, 
+    private (Dictionary<string, string> hashes,
              Dictionary<string, Dictionary<string, object?>> rowData,
              TableMetadata metadata) ExtractAndHashTable(DatabaseType dbType, string tableRef)
     {

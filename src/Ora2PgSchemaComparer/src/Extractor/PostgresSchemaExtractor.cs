@@ -1,6 +1,8 @@
+using System.Data;
 using Npgsql;
 using Serilog;
 using Ora2Pg.Common.Connection;
+using Ora2Pg.Common.Config;
 using Ora2PgSchemaComparer.Model;
 
 namespace Ora2PgSchemaComparer.Extractor;
@@ -9,22 +11,34 @@ public class PostgresSchemaExtractor
 {
     private readonly ILogger _logger = Log.ForContext<PostgresSchemaExtractor>();
     private readonly DatabaseConnectionManager _connectionManager;
-    
+    private readonly HashSet<string> _columnsToSkip;
+
     public PostgresSchemaExtractor(DatabaseConnectionManager connectionManager)
     {
         _connectionManager = connectionManager;
+
+        var skipColumnsEnv = ApplicationProperties.Instance.Get("POSTGRES_SKIP_COLUMNS", string.Empty);
+        _columnsToSkip = new HashSet<string>(
+            skipColumnsEnv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            StringComparer.OrdinalIgnoreCase
+        );
+
+        if (_columnsToSkip.Any())
+        {
+            _logger.Information("Columns to skip in PostgreSQL schema: {SkipColumns}", string.Join(", ", _columnsToSkip));
+        }
     }
-    
+
     public SchemaDefinition ExtractSchema(string schemaName)
     {
         _logger.Information("Extracting PostgreSQL schema: {SchemaName}", schemaName);
-        
+
         var schema = new SchemaDefinition
         {
             SchemaName = schemaName.ToLower(),
             DatabaseType = "PostgreSQL"
         };
-        
+
         schema.Tables = ExtractTables(schemaName);
         schema.Constraints = ExtractConstraints(schemaName);
         schema.Indexes = ExtractIndexes(schemaName);
@@ -32,20 +46,20 @@ public class PostgresSchemaExtractor
         schema.Views = ExtractViews(schemaName);
         schema.Triggers = ExtractTriggers(schemaName);
         schema.Procedures = ExtractProcedures(schemaName);
-        
+
         _logger.Information("✓ Extracted PostgreSQL schema: {TableCount} tables, {ConstraintCount} constraints, {IndexCount} indexes",
             schema.TableCount, schema.Constraints.Count, schema.IndexCount);
-        
+
         return schema;
     }
-    
+
     private List<TableDefinition> ExtractTables(string schemaName)
     {
         var tables = new List<TableDefinition>();
-        
+
         using var connection = _connectionManager.GetConnection(DatabaseType.PostgreSQL);
         connection.Open();
-        
+
         var query = @"
             SELECT t.table_name,
                    pg_catalog.obj_description((quote_ident(t.table_schema)||'.'||quote_ident(t.table_name))::regclass, 'pg_class') as table_comment,
@@ -53,10 +67,10 @@ public class PostgresSchemaExtractor
             FROM information_schema.tables t
             WHERE t.table_schema = $1 AND t.table_type = 'BASE TABLE'
             ORDER BY t.table_name";
-        
+
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
         cmd.Parameters.AddWithValue(schemaName.ToLower());
-        
+
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
@@ -67,40 +81,53 @@ public class PostgresSchemaExtractor
                 TableComment = reader.IsDBNull(1) ? null : reader.GetString(1),
                 IsPartitioned = reader.GetBoolean(2)
             };
-            
+
             table.Columns = ExtractColumns(schemaName, table.TableName);
             tables.Add(table);
         }
-        
+
         return tables;
     }
-    
+
     private List<ColumnDefinition> ExtractColumns(string schemaName, string tableName)
     {
         var columns = new List<ColumnDefinition>();
-        
+
         using var connection = _connectionManager.GetConnection(DatabaseType.PostgreSQL);
         connection.Open();
-        
+
         var query = @"
-            SELECT c.column_name, c.ordinal_position, c.data_type, 
+            SELECT c.column_name, c.ordinal_position, c.data_type,
                    c.character_maximum_length, c.numeric_precision, c.numeric_scale,
                    c.is_nullable, c.column_default,
                    pg_catalog.col_description((quote_ident(c.table_schema)||'.'||quote_ident(c.table_name))::regclass, c.ordinal_position) as column_comment
             FROM information_schema.columns c
             WHERE c.table_schema = $1 AND c.table_name = $2
             ORDER BY c.ordinal_position";
-        
+
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         cmd.Parameters.AddWithValue(tableName.ToLower());
-        
+
         using var reader = cmd.ExecuteReader();
+        int totalColumns = 0;
+        int skippedColumns = 0;
+
         while (reader.Read())
         {
+            totalColumns++;
+            string columnName = reader.GetString(0);
+
+            if (_columnsToSkip.Contains(columnName))
+            {
+                skippedColumns++;
+                _logger.Debug("Skipping column: {ColumnName} in PostgreSQL table {TableName}", columnName, tableName);
+                continue;
+            }
+
             columns.Add(new ColumnDefinition
             {
-                ColumnName = reader.GetString(0),
+                ColumnName = columnName,
                 ColumnPosition = reader.GetInt32(1),
                 DataType = reader.GetString(2).ToUpper(),
                 DataLength = reader.IsDBNull(3) ? null : reader.GetInt32(3),
@@ -110,6 +137,12 @@ public class PostgresSchemaExtractor
                 DefaultValue = reader.IsDBNull(7) ? null : reader.GetString(7),
                 ColumnComment = reader.IsDBNull(8) ? null : reader.GetString(8)
             });
+        }
+
+        if (skippedColumns > 0)
+        {
+            _logger.Information("Skipped {SkippedCount} column(s) in PostgreSQL table {SchemaName}.{TableName} (Total: {TotalCount}, Extracted: {ExtractedCount})",
+                skippedColumns, schemaName, tableName, totalColumns, columns.Count);
         }
         
         return columns;

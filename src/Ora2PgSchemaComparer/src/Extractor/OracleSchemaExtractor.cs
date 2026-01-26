@@ -1,6 +1,8 @@
+using System.Data;
 using Oracle.ManagedDataAccess.Client;
 using Serilog;
 using Ora2Pg.Common.Connection;
+using Ora2Pg.Common.Config;
 using Ora2PgSchemaComparer.Model;
 
 namespace Ora2PgSchemaComparer.Extractor;
@@ -10,22 +12,34 @@ public class OracleSchemaExtractor
 {
     private readonly ILogger _logger = Log.ForContext<OracleSchemaExtractor>();
     private readonly DatabaseConnectionManager _connectionManager;
-    
+    private readonly HashSet<string> _columnsToSkip;
+
     public OracleSchemaExtractor(DatabaseConnectionManager connectionManager)
     {
         _connectionManager = connectionManager;
+
+        var skipColumnsEnv = ApplicationProperties.Instance.Get("ORACLE_SKIP_COLUMNS", string.Empty);
+        _columnsToSkip = new HashSet<string>(
+            skipColumnsEnv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            StringComparer.OrdinalIgnoreCase
+        );
+
+        if (_columnsToSkip.Any())
+        {
+            _logger.Information("Columns to skip in Oracle schema: {SkipColumns}", string.Join(", ", _columnsToSkip));
+        }
     }
-    
+
     public SchemaDefinition ExtractSchema(string schemaName)
     {
         _logger.Information("Extracting Oracle schema: {SchemaName}", schemaName);
-        
+
         var schema = new SchemaDefinition
         {
             SchemaName = schemaName.ToUpper(),
             DatabaseType = "Oracle"
         };
-        
+
         schema.Tables = ExtractTables(schemaName);
         schema.Constraints = ExtractConstraints(schemaName);
         schema.Indexes = ExtractIndexes(schemaName);
@@ -33,29 +47,29 @@ public class OracleSchemaExtractor
         schema.Views = ExtractViews(schemaName);
         schema.Triggers = ExtractTriggers(schemaName);
         schema.Procedures = ExtractProcedures(schemaName);
-        
+
         _logger.Information("✓ Extracted Oracle schema: {TableCount} tables, {ConstraintCount} constraints, {IndexCount} indexes",
             schema.TableCount, schema.Constraints.Count, schema.IndexCount);
-        
+
         return schema;
     }
-    
+
     private List<TableDefinition> ExtractTables(string schemaName)
     {
         var tables = new List<TableDefinition>();
-        
+
         using var connection = _connectionManager.GetConnection(DatabaseType.Oracle);
         connection.Open();
 
         var query = $@"
-            SELECT table_name, partitioned, 
+            SELECT table_name, partitioned,
                    (SELECT comments FROM all_tab_comments WHERE owner = t.owner AND table_name = t.table_name) as table_comment
             FROM all_tables t
             WHERE owner = '{schemaName.ToUpper()}'
             ORDER BY table_name";
-        
+
         using var cmd = new OracleCommand(query, (OracleConnection)connection);
-        
+
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
@@ -66,37 +80,50 @@ public class OracleSchemaExtractor
                 IsPartitioned = reader.GetString(1) == "YES",
                 TableComment = reader.IsDBNull(2) ? null : reader.GetString(2)
             };
-            
+
             table.Columns = ExtractColumns(schemaName, table.TableName);
             tables.Add(table);
         }
-        
+
         return tables;
     }
-    
+
     private List<ColumnDefinition> ExtractColumns(string schemaName, string tableName)
     {
         var columns = new List<ColumnDefinition>();
-        
+
         using var connection = _connectionManager.GetConnection(DatabaseType.Oracle);
         connection.Open();
-        
+
         var query = $@"
-            SELECT column_name, column_id, data_type, data_length, data_precision, data_scale, 
+            SELECT column_name, column_id, data_type, data_length, data_precision, data_scale,
                    nullable, data_default,
                    (SELECT comments FROM all_col_comments WHERE owner = c.owner AND table_name = c.table_name AND column_name = c.column_name) as column_comment
             FROM all_tab_columns c
             WHERE owner = '{schemaName.ToUpper()}' AND table_name = '{tableName.ToUpper()}'
             ORDER BY column_id";
-        
+
         using var cmd = new OracleCommand(query, (OracleConnection)connection);
-        
+
         using var reader = cmd.ExecuteReader();
+        int totalColumns = 0;
+        int skippedColumns = 0;
+
         while (reader.Read())
         {
+            totalColumns++;
+            string columnName = reader.GetString(0);
+
+            if (_columnsToSkip.Contains(columnName))
+            {
+                skippedColumns++;
+                _logger.Debug("Skipping column: {ColumnName} in Oracle table {TableName}", columnName, tableName);
+                continue;
+            }
+
             columns.Add(new ColumnDefinition
             {
-                ColumnName = reader.GetString(0),
+                ColumnName = columnName,
                 ColumnPosition = reader.GetInt32(1),
                 DataType = reader.GetString(2),
                 DataLength = reader.IsDBNull(3) ? null : Convert.ToInt32(reader.GetValue(3)),
@@ -106,6 +133,12 @@ public class OracleSchemaExtractor
                 DefaultValue = reader.IsDBNull(7) ? null : reader.GetString(7),
                 ColumnComment = reader.IsDBNull(8) ? null : reader.GetString(8)
             });
+        }
+
+        if (skippedColumns > 0)
+        {
+            _logger.Information("Skipped {SkippedCount} column(s) in Oracle table {SchemaName}.{TableName} (Total: {TotalCount}, Extracted: {ExtractedCount})",
+                skippedColumns, schemaName, tableName, totalColumns, columns.Count);
         }
         
         return columns;
