@@ -291,6 +291,55 @@ HASH_ALGORITHM=SHA256
 
 # Save hash values to CSV files:
 SAVE_HASHES_TO_CSV=true
+
+# Columns to Skip in PostgreSQL (comma-separated list):
+#   Leave empty to compare all columns
+POSTGRES_SKIP_COLUMNS=
+
+# Columns to Skip in Oracle (comma-separated list):
+#   Leave empty to compare all columns
+ORACLE_SKIP_COLUMNS=
+```
+
+### Column Filtering Feature
+
+When migrating from Oracle to PostgreSQL, it's common for the PostgreSQL schema to include additional columns (e.g., audit columns like `created_at`, `updated_at`, `migration_id`) that don't exist in the Oracle source database. Similarly, Oracle might have deprecated columns that are not migrated to PostgreSQL.
+
+The **column filtering feature** allows you to exclude specific columns from the data comparison process:
+
+**PostgreSQL Additional Columns:**
+If PostgreSQL has extra columns like `created_at` and `updated_at`:
+```bash
+POSTGRES_SKIP_COLUMNS=created_at,updated_at,migration_id
+```
+
+**Oracle Deprecated Columns:**
+If Oracle has old columns not migrated:
+```bash
+ORACLE_SKIP_COLUMNS=legacy_field,old_status,deprecated_column
+```
+
+**How It Works:**
+1. The validator reads the skip column configuration from environment variables
+2. During metadata extraction, it filters out the specified columns
+3. Only the remaining common columns are used for hash generation
+4. This ensures fair comparison between databases with different column sets
+
+**Benefits:**
+- ✅ Compare databases with different column counts
+- ✅ Handle audit columns added during migration
+- ✅ Skip timestamp columns that differ by nature
+- ✅ Focus validation on business-critical data only
+
+**Example Use Case:**
+```bash
+# Oracle table: EMPLOYEES (10 columns)
+# PostgreSQL table: employees (12 columns - includes created_at, updated_by)
+
+# Configure to skip the PostgreSQL-only columns
+POSTGRES_SKIP_COLUMNS=created_at,updated_by
+
+# Now both databases will be compared on the same 10 columns
 ```
 
 ---

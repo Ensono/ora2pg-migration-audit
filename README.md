@@ -9,29 +9,29 @@ This solution provides production-ready validation tools that work with **any Or
 This solution provides four complementary validation tools:
 
 1. **Ora2PgSchemaComparer** - Validates database structure (tables, constraints, indexes, code objects)
-   - Works with any Oracle and PostgreSQL schemas
-   - Configurable via environment variables
-   - No hardcoded database assumptions
+    - Works with any Oracle and PostgreSQL schemas
+    - Configurable via environment variables
+    - No hardcoded database assumptions
 
 2. **Ora2PgDataTypeValidator** - Validates Oracle to PostgreSQL data type mappings
-   - Comprehensive coverage of 50+ Oracle data types (standard, legacy, advanced, spatial)
-   - Prevents data loss, overflow, and precision issues
-   - Validates all numeric, string, date/time, binary, and boolean type conversions
-   - Advanced type support: XMLTYPE, JSON, ROWID, BFILE, SDO_GEOMETRY, User-Defined Types
-   - Critical validation for empty string handling (Oracle '' = NULL vs PostgreSQL)
-   - Dual report formats: Markdown (.md) and Plain Text (.txt)
+    - Comprehensive coverage of 50+ Oracle data types (standard, legacy, advanced, spatial)
+    - Prevents data loss, overflow, and precision issues
+    - Validates all numeric, string, date/time, binary, and boolean type conversions
+    - Advanced type support: XMLTYPE, JSON, ROWID, BFILE, SDO_GEOMETRY, User-Defined Types
+    - Critical validation for empty string handling (Oracle '' = NULL vs PostgreSQL)
+    - Dual report formats: Markdown (.md) and Plain Text (.txt)
 
 3. **Ora2PgRowCountValidator** - Validates row counts table-by-table
-   - Compares row counts between Oracle and PostgreSQL for all tables
-   - Severity-based reporting (Critical/Error/Warning/Info)
-   - Detects missing tables, extra tables, and row count mismatches
-   - Percentage-based thresholds for intelligent issue classification
-   - Dual report formats: Markdown (.md) and Plain Text (.txt)
+    - Compares row counts between Oracle and PostgreSQL for all tables
+    - Severity-based reporting (Critical/Error/Warning/Info)
+    - Detects missing tables, extra tables, and row count mismatches
+    - Percentage-based thresholds for intelligent issue classification
+    - Dual report formats: Markdown (.md) and Plain Text (.txt)
 
 4. **Ora2PgDataValidator** - Validates actual data using cryptographic hash fingerprinting
-   - Auto-discovers tables or uses explicit mappings
-   - Supports any schema structure
-   - Handles tables of any size
+    - Auto-discovers tables or uses explicit mappings
+    - Supports any schema structure
+    - Handles tables of any size
 
 All tools share a common library (`Ora2Pg.Common`) and configuration (`.env` file at solution root).
 
@@ -211,7 +211,8 @@ Main application for validating Oracle to PostgreSQL data migrations using crypt
 - Extracts data from both Oracle and PostgreSQL databases
 - Generates SHA256/MD5 hash fingerprints for each row
 - Compares hashes to identify mismatches, missing rows, and extra rows
-- Generates detailed validation reports
+- **Column filtering** - Skip additional columns via environment variables (e.g., audit columns in PostgreSQL)
+- Generates detailed validation reports (Markdown, HTML, Text)
 
 **Dependencies:**
 - References: Ora2Pg.Common
@@ -249,13 +250,14 @@ Data type mapping validation tool that prevents data loss, overflow, and precisi
 - ✅ **Date/Time Type Validations**: DATE, TIMESTAMP, TIMESTAMPTZ, INTERVAL types
 - ✅ **Binary Type Validations**: BLOB, RAW, LONG RAW (legacy), BYTEA mappings
 - ✅ **Boolean Type Validations**: NUMBER(1)/CHAR(1) → BOOLEAN conversions
-- ✅ **Advanced Oracle Types**: 
-  - XMLTYPE → XML/TEXT (XPath/XQuery support)
-  - JSON → JSONB/JSON (Oracle 12c+)
-  - ROWID/UROWID → VARCHAR (internal row identifiers)
-  - BFILE → External file pointer (requires migration strategy)
-  - SDO_GEOMETRY → PostGIS GEOMETRY/GEOGRAPHY (spatial data)
-  - User-Defined Types (UDTs) → Composite types or JSON
+- ✅ **Column filtering** - Skip additional columns via environment variables (e.g., audit columns in PostgreSQL)
+- ✅ **Advanced Oracle Types**:
+    - XMLTYPE → XML/TEXT (XPath/XQuery support)
+    - JSON → JSONB/JSON (Oracle 12c+)
+    - ROWID/UROWID → VARCHAR (internal row identifiers)
+    - BFILE → External file pointer (requires migration strategy)
+    - SDO_GEOMETRY → PostGIS GEOMETRY/GEOGRAPHY (spatial data)
+    - User-Defined Types (UDTs) → Composite types or JSON
 - ✅ **Critical Validation**: Empty string handling (Oracle `''` = NULL vs PostgreSQL `''` ≠ NULL)
 - ✅ **Dual Report Formats**: Generates both Markdown (.md) and Plain Text (.txt) reports
 

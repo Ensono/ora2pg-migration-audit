@@ -1,4 +1,4 @@
-# Ora2PgSchemaComparer 
+# Ora2PgSchemaComparer
 
 ## Overview
 
@@ -109,6 +109,52 @@ POSTGRES_DB=postgres
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=your_postgres_password
 POSTGRES_SCHEMA=chinook
+
+# Column Filtering (Optional - skip specific columns during comparison)
+# Useful when PostgreSQL has additional audit columns not in Oracle
+POSTGRES_SKIP_COLUMNS=created_at,updated_at,migration_id,synced_at
+ORACLE_SKIP_COLUMNS=old_status,legacy_field
+```
+
+### Column Filtering Feature
+
+When migrating from Oracle to PostgreSQL, you may have **additional columns** in PostgreSQL (or Oracle) that don't exist in the source database. Common scenarios:
+
+**Scenario 1: PostgreSQL Has Audit Columns**
+```bash
+# Oracle: EMPLOYEES table (10 columns)
+# PostgreSQL: employees table (12 columns - includes created_at, updated_by)
+
+POSTGRES_SKIP_COLUMNS=created_at,updated_by,synced_at
+```
+
+**Scenario 2: Oracle Has Deprecated Columns**
+```bash
+# Oracle: CUSTOMERS (15 columns - includes old_status, legacy_field)
+# PostgreSQL: customers (13 columns - deprecated columns not migrated)
+
+ORACLE_SKIP_COLUMNS=old_status,legacy_field
+```
+
+**Scenario 3: Both Have Unique Columns**
+```bash
+ORACLE_SKIP_COLUMNS=oracle_specific_id
+POSTGRES_SKIP_COLUMNS=created_at,updated_at,pg_migration_flag
+```
+
+**How It Works:**
+- Columns are filtered **during schema extraction** from each database
+- Column names are **case-insensitive** (works with Oracle UPPERCASE and PostgreSQL lowercase)
+- Only the remaining columns are compared for structure, order, and data types
+- Filtered columns appear in logs: `"Skipped N column(s) in [schema].[table]"`
+
+**Benefits:**
+- ✅ Accurate schema comparison focused on business data
+- ✅ Handle audit columns gracefully (created_at, updated_at, etc.)
+- ✅ Support for different schema evolution strategies
+- ✅ Flexible configuration per database
+- ✅ No code changes needed - pure configuration
+
 ```
 
 **Note**: The solution automatically detects and loads the `.env` file from the solution root, regardless of which directory you run the tool from.

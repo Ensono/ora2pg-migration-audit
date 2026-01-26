@@ -105,11 +105,18 @@ POSTGRES_DATABASE=your_database
 POSTGRES_USER=your_user
 POSTGRES_PASSWORD=your_password
 POSTGRES_SCHEMA=your_postgres_schema  # e.g., hr, sales
+POSTGRES_SKIP_COLUMNS=
+ORACLE_SKIP_COLUMNS=
 ```
 
 > 💡 **Schema Names**:
 > - **Oracle schemas** are typically UPPERCASE (e.g., `HR`, `SALES`)
 > - **PostgreSQL schemas** are typically lowercase (e.g., `hr`, `sales`)
+
+> 💡 **Column Filtering**:
+> - Use this feature when PostgreSQL has audit columns (e.g., `created_at`, `updated_at`) that weren't in Oracle
+> - Or when Oracle has deprecated columns that weren't migrated to PostgreSQL
+> - Only the common columns will be validated for data type compatibility
 
 ### 2. Build and Run
 
