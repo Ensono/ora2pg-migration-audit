@@ -89,19 +89,22 @@ queries/
 - `{ORACLE_SCHEMA}` - Replaced with the value from ORACLE_SCHEMA in .env
 - `{POSTGRES_SCHEMA}` - Replaced with the value from POSTGRES_SCHEMA in .env
 
-**Oracle queries** should use Oracle-specific syntax:
+**Oracle queries** should use Oracle-specific syntax and system views:
 ```sql
 -- queries/oracle/01_list_tables_columns.sql
 SELECT 
     table_name,
     column_name,
-    data_type
+    data_type,
+    data_length,
+    nullable
 FROM 
-    information_schema.columns
+    all_tab_columns
 WHERE 
-    table_schema = '{ORACLE_SCHEMA}'
+    owner = '{ORACLE_SCHEMA}'
 ORDER BY 
-    table_name, column_name
+    table_name, 
+    column_id
 ```
 
 **PostgreSQL queries** should use PostgreSQL-specific syntax:
@@ -116,7 +119,8 @@ FROM
 WHERE 
     table_schema = '{POSTGRES_SCHEMA}'
 ORDER BY 
-    table_name, column_name
+    table_name, 
+    column_name
 ```
 
 **All included queries are generic** and work on any Oracle/PostgreSQL database without requiring specific tables or data. They query database metadata (tables, columns, indexes, constraints, views, sequences, etc.).
@@ -172,11 +176,11 @@ The validator uses multiple measurement techniques for accuracy:
 
 All queries are **generic** and work on any Oracle/PostgreSQL database without requiring specific tables:
 
-1. **01_list_tables_columns.sql**: Lists all tables and columns using information_schema
+1. **01_list_tables_columns.sql**: Lists all tables and columns using all_tab_columns (Oracle) / information_schema (PostgreSQL)
 2. **02_count_tables.sql**: Counts total number of tables in the schema
 3. **03_list_indexes.sql**: Lists all indexes and their columns
 4. **04_list_constraints.sql**: Lists all constraints (PRIMARY KEY, FOREIGN KEY, UNIQUE, CHECK)
-5. **05_table_statistics.sql**: Retrieves table statistics (row counts, sizes)
+5. **05_table_statistics.sql**: Retrieves table metadata (tablespace, type, partitioning)
 6. **06_list_sequences.sql**: Lists all sequences in the schema
 7. **07_list_views.sql**: Lists all views in the schema
 8. **08_table_column_summary.sql**: Complex query with JOINs and aggregates (tables with column counts)
@@ -192,7 +196,8 @@ To add your own query pairs:
 5. Run the validator - your new query pair will be automatically detected and executed
 
 **Tips for custom queries:**
-- For generic metadata queries, use information_schema or system catalogs
+- For Oracle metadata queries, use system views like `all_tables`, `all_tab_columns`, `all_indexes`, `all_constraints`, `all_views`, `all_sequences`
+- For PostgreSQL metadata queries, use `information_schema` views or `pg_catalog` system catalogs
 - For database-specific queries (requiring specific tables), ensure those tables exist in both databases
 - Test each query individually before pairing them
 - Consider performance: complex queries may show natural variance between databases

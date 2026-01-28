@@ -80,13 +80,15 @@ public class QueryExecutor
 
     private async Task<(double executionTimeMs, long rowCount)> ExecuteOracleQueryAsync(string query)
     {
+        await using var conn = new OracleConnection(_oracleConnectionString);
+        await conn.OpenAsync();
+        
         for (int i = 0; i < _warmupRuns; i++)
         {
-            await using var warmupConn = new OracleConnection(_oracleConnectionString);
-            await warmupConn.OpenAsync();
-            await using var warmupCmd = new OracleCommand(query, warmupConn);
+            await using var warmupCmd = new OracleCommand(query, conn);
             warmupCmd.CommandTimeout = DefaultCommandTimeoutSeconds;
-            await warmupCmd.ExecuteNonQueryAsync();
+            await using var warmupReader = await warmupCmd.ExecuteReaderAsync();
+            while (await warmupReader.ReadAsync()) { }
         }
 
         var times = new List<double>();
@@ -94,8 +96,6 @@ public class QueryExecutor
 
         for (int i = 0; i < _measurementRuns; i++)
         {
-            await using var conn = new OracleConnection(_oracleConnectionString);
-            await conn.OpenAsync();
             await using var cmd = new OracleCommand(query, conn);
             cmd.CommandTimeout = DefaultCommandTimeoutSeconds;
 
@@ -118,13 +118,15 @@ public class QueryExecutor
 
     private async Task<(double executionTimeMs, long rowCount)> ExecutePostgresQueryAsync(string query)
     {
+        await using var conn = new NpgsqlConnection(_postgresConnectionString);
+        await conn.OpenAsync();
+        
         for (int i = 0; i < _warmupRuns; i++)
         {
-            await using var warmupConn = new NpgsqlConnection(_postgresConnectionString);
-            await warmupConn.OpenAsync();
-            await using var warmupCmd = new NpgsqlCommand(query, warmupConn);
+            await using var warmupCmd = new NpgsqlCommand(query, conn);
             warmupCmd.CommandTimeout = DefaultCommandTimeoutSeconds;
-            await warmupCmd.ExecuteNonQueryAsync();
+            await using var warmupReader = await warmupCmd.ExecuteReaderAsync();
+            while (await warmupReader.ReadAsync()) { }
         }
 
         var times = new List<double>();
@@ -132,8 +134,6 @@ public class QueryExecutor
 
         for (int i = 0; i < _measurementRuns; i++)
         {
-            await using var conn = new NpgsqlConnection(_postgresConnectionString);
-            await conn.OpenAsync();
             await using var cmd = new NpgsqlCommand(query, conn);
             cmd.CommandTimeout = DefaultCommandTimeoutSeconds;
 
@@ -163,8 +163,8 @@ public class QueryExecutor
         
         if (sorted.Count % 2 == 0)
             return (sorted[mid - 1] + sorted[mid]) / 2.0;
-        else
-            return sorted[mid];
+        
+        return sorted[mid];
     }
 
     private void AnalyzeResults(QueryPerformanceResult result)
