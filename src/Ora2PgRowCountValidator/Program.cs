@@ -56,7 +56,7 @@ class Program
             {
                 Host = props.Get("POSTGRES_HOST", "localhost"),
                 Port = props.GetInt("POSTGRES_PORT", 5432),
-                ServiceOrDatabase = props.Get("POSTGRES_DATABASE"),
+                ServiceOrDatabase = props.Get("POSTGRES_DB"),
                 Username = props.Get("POSTGRES_USER"),
                 Password = props.Get("POSTGRES_PASSWORD")
             };
@@ -120,8 +120,7 @@ class Program
 
 
             Log.Information("📝 Generating reports...");
-            var reportsDir = Path.Combine(Directory.GetCurrentDirectory(), "reports");
-            Directory.CreateDirectory(reportsDir);
+            var reportsDir = props.GetReportsDirectory("Ora2PgRowCountValidator");
 
             var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             var baseReportPath = Path.Combine(reportsDir, $"rowcount-validation-{timestamp}");

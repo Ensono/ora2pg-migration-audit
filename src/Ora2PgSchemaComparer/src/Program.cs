@@ -54,22 +54,22 @@ try
     var comparisonResult = comparator.Compare(oracleSchemaDefinition, postgresSchemaDefinition);
 
     Log.Information("Generating schema comparison reports...");
-    Directory.CreateDirectory("reports");
+    var reportsDir = props.GetReportsDirectory("Ora2PgSchemaComparer");
     var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
 
     var markdownWriter = new SchemaComparisonMarkdownWriter();
-    var markdownReportPath = $"reports/schema-comparison-{timestamp}.md";
+    var markdownReportPath = Path.Combine(reportsDir, $"schema-comparison-{timestamp}.md");
     markdownWriter.WriteMarkdownReport(comparisonResult, markdownReportPath);
     Log.Information("📄 Markdown report saved to: {ReportPath}", markdownReportPath);
 
     var reportWriter = new SchemaComparisonReportWriter();
     var report = reportWriter.GenerateReport(comparisonResult);
-    var textReportPath = $"reports/schema-comparison-{timestamp}.txt";
+    var textReportPath = Path.Combine(reportsDir, $"schema-comparison-{timestamp}.txt");
     await File.WriteAllTextAsync(textReportPath, report);
     Log.Information("📄 Text report saved to: {ReportPath}", textReportPath);
 
     var htmlWriter = new SchemaComparisonHtmlWriter();
-    var htmlReportPath = $"reports/schema-comparison-{timestamp}.html";
+    var htmlReportPath = Path.Combine(reportsDir, $"schema-comparison-{timestamp}.html");
     htmlWriter.WriteHtmlReport(comparisonResult, htmlReportPath);
     Log.Information("📄 HTML report saved to: {ReportPath}", htmlReportPath);
 

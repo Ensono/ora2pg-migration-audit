@@ -1,22 +1,29 @@
 using Ora2PgDataValidator.Comparison;
+using Ora2Pg.Common.Config;
 
 namespace Ora2PgDataValidator.src.Writers;
 
 public class ComparisonReportWriter
 {
-    private const string ReportsDir = "./reports";
+    private readonly string _reportsDir;
     private const int ReportLineWidth = 100;
+
+    public ComparisonReportWriter()
+    {
+        var props = ApplicationProperties.Instance;
+        _reportsDir = props.GetReportsDirectory("Ora2PgDataValidator");
+    }
     
     public string GenerateDetailedReport(List<ComparisonResult> results)
     {
-        if (!Directory.Exists(ReportsDir))
+        if (!Directory.Exists(_reportsDir))
         {
-            Directory.CreateDirectory(ReportsDir);
+            Directory.CreateDirectory(_reportsDir);
         }
 
         string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         string reportFilename = $"migration_comparison_report_{timestamp}.txt";
-        string reportPath = Path.Combine(ReportsDir, reportFilename);
+        string reportPath = Path.Combine(_reportsDir, reportFilename);
 
         using var writer = new StreamWriter(reportPath);
         

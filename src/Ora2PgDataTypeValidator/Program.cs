@@ -45,7 +45,7 @@ try
     {
         Host = props.Get("POSTGRES_HOST", "localhost"),
         Port = props.GetInt("POSTGRES_PORT", 5432),
-        ServiceOrDatabase = props.Get("POSTGRES_DATABASE"),
+        ServiceOrDatabase = props.Get("POSTGRES_DB"),
         Username = props.Get("POSTGRES_USER"),
         Password = props.Get("POSTGRES_PASSWORD")
     };
@@ -78,18 +78,18 @@ try
     var result = validator.Validate(oracleColumns, postgresColumns);
 
     Log.Information("📝 Generating validation reports...");
-    Directory.CreateDirectory("reports");
+    var reportsDir = props.GetReportsDirectory("Ora2PgDataTypeValidator");
     var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
     
     var reportWriter = new ValidationReportWriter();
 
     reportWriter.WriteConsoleReport(result);
 
-    var markdownReportPath = Path.Combine("reports", $"datatype-validation-{timestamp}.md");
+    var markdownReportPath = Path.Combine(reportsDir, $"datatype-validation-{timestamp}.md");
     await reportWriter.WriteReportsAsync(result, markdownReportPath);
 
     var htmlWriter = new DataTypeValidationHtmlWriter();
-    var htmlReportPath = Path.Combine("reports", $"datatype-validation-{timestamp}.html");
+    var htmlReportPath = Path.Combine(reportsDir, $"datatype-validation-{timestamp}.html");
     htmlWriter.WriteHtmlReport(result, htmlReportPath);
     Log.Information("📄 HTML report saved to: {ReportPath}", htmlReportPath);
 

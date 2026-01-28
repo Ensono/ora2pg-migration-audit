@@ -15,8 +15,7 @@ obj/
 *.log
 logs/
 reports/
-/Ora2PgDataTypeValidator/reports/
-/Ora2PgRowCountValidator/reports/
+src/*/reports/
 
 # macOS system files
 .DS_Store

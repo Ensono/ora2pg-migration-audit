@@ -17,7 +17,7 @@ public class CsvHashWriter
         var props = ApplicationProperties.Instance;
         _saveHashesToCsv = props.GetBool("SAVE_HASHES_TO_CSV",
             props.GetBool("save.hashes.to.csv", true));
-        _outputDir = "./reports";
+        _outputDir = props.GetReportsDirectory("Ora2PgDataValidator");
 
         if (_saveHashesToCsv)
         {
