@@ -6,7 +6,7 @@ This solution provides production-ready validation tools that work with **any Or
 
 ## What's Included
 
-This solution provides four complementary validation tools:
+This solution provides five complementary validation tools:
 
 1. **Ora2PgSchemaComparer** - Validates database structure (tables, constraints, indexes, code objects)
     - Works with any Oracle and PostgreSQL schemas
@@ -28,7 +28,15 @@ This solution provides four complementary validation tools:
     - Percentage-based thresholds for intelligent issue classification
     - Dual report formats: Markdown (.md) and Plain Text (.txt)
 
-4. **Ora2PgDataValidator** - Validates actual data using cryptographic hash fingerprinting
+4. **Ora2PgPerformanceValidator** - Validates and compares query performance
+    - Executes paired SQL queries against both databases
+    - Measures execution time with warmup and median timing
+    - Configurable performance threshold for warnings
+    - Generic schema parameters for portability
+    - Includes 8 generic metadata queries (tables, indexes, constraints, views, sequences, etc.)
+    - Triple report formats: Markdown (.md), HTML (.html), and Plain Text (.txt)
+
+5. **Ora2PgDataValidator** - Validates actual data using cryptographic hash fingerprinting
     - Auto-discovers tables or uses explicit mappings
     - Supports any schema structure
     - Handles tables of any size
@@ -90,6 +98,17 @@ ora2pg-migration-audit/
 │       ├── Extractors/              # Oracle/PostgreSQL row count extractors
 │       ├── Comparison/              # Row count comparison logic
 │       └── Reports/                 # Validation report generation
+├── Ora2PgPerformanceValidator/      # 🆕 Performance validation tool
+│   ├── Ora2PgPerformanceValidator.csproj # Project file (references Ora2Pg.Common)
+│   ├── README.md                    # Performance validation guide
+│   ├── queries/                     # SQL query pairs
+│   │   ├── oracle/                  # Oracle query files
+│   │   └── postgres/                # PostgreSQL query files
+│   └── src/                         # Source code
+│       ├── Models.cs                # Performance result models
+│       ├── QueryExecutor.cs         # Query execution with timing
+│       ├── QueryLoader.cs           # Query file loader with parameter substitution
+│       └── PerformanceReportWriter.cs # Report generation (MD/HTML/TXT)
 └── tests/                           # Test projects
 ```
 
@@ -130,13 +149,16 @@ dotnet run --project Ora2PgDataTypeValidator/Ora2PgDataTypeValidator.csproj
 
 # Or run the row count validator
 dotnet run --project Ora2PgRowCountValidator/Ora2PgRowCountValidator.csproj
+
+# Or run the performance validator
+dotnet run --project Ora2PgPerformanceValidator/Ora2PgPerformanceValidator.csproj
 ```
 
 **From Project Directory:**
 
 ```bash
 # Navigate to the project
-cd Ora2PgDataValidator  # or Ora2PgSchemaComparer or Ora2PgDataTypeValidator or Ora2PgRowCountValidator
+cd Ora2PgDataValidator  # or Ora2PgSchemaComparer or Ora2PgDataTypeValidator or Ora2PgRowCountValidator or Ora2PgPerformanceValidator
 
 # Build
 dotnet build
@@ -145,9 +167,9 @@ dotnet build
 dotnet run
 ```
 
-### Running All Four Validators
+### Running All Five Validators
 
-For comprehensive migration validation, run all four tools in sequence:
+For comprehensive migration validation, run all five tools in sequence:
 
 ```bash
 cd ora2pg-migration-audit
@@ -167,7 +189,12 @@ cd Ora2PgRowCountValidator
 dotnet run
 cd ..
 
-# 4. Validate actual data integrity
+# 4. Validate query performance
+cd Ora2PgPerformanceValidator
+dotnet run
+cd ..
+
+# 5. Validate actual data integrity
 cd Ora2PgDataValidator
 dotnet run
 cd ..
@@ -177,9 +204,8 @@ This gives you a complete validation covering:
 - ✅ Schema structure (tables, PKs, FKs, indexes)
 - ✅ Data type mappings (proper type conversions)
 - ✅ Row counts (no missing or extra data)
+- ✅ Query performance (execution time comparisons)
 - ✅ Data integrity (hash fingerprinting)
-- ✅ Data type mappings (preventing overflow, precision loss)
-- ✅ Data integrity (row counts, hash fingerprints)
 
 ## Projects
 
@@ -202,6 +228,8 @@ This gives you a complete validation covering:
 - Ora2PgDataValidator
 - Ora2PgSchemaComparer
 - Ora2PgDataTypeValidator
+- Ora2PgRowCountValidator
+- Ora2PgPerformanceValidator
 
 ### Ora2PgDataValidator
 
@@ -283,6 +311,60 @@ Data type mapping validation tool that prevents data loss, overflow, and precisi
 - Legacy/deprecated types (LONG, LONG RAW)
 - Advanced types (XMLTYPE, JSON, spatial)
 - Production database edge cases
+
+### Ora2PgRowCountValidator
+
+Row count validation tool that compares table row counts between Oracle and PostgreSQL databases with intelligent severity classification.
+
+**Key Features:**
+- ✅ **Automated Discovery**: Finds all tables in both databases
+- ✅ **Intelligent Comparison**: Configurable thresholds for warning vs error classification
+- ✅ **Missing/Extra Detection**: Identifies tables that exist in only one database
+- ✅ **Percentage-Based Analysis**: Calculates row count difference percentages
+- ✅ **Dual Report Formats**: Generates both Markdown (.md) and Plain Text (.txt) reports
+- ✅ **Severity Levels**: Critical/Error/Warning/Info classification
+
+**Dependencies:**
+- References: Ora2Pg.Common
+- NuGet: Oracle.ManagedDataAccess.Core, Npgsql, Serilog.Sinks.Console
+
+📖 **Full Documentation:** See [Ora2PgRowCountValidator/README.md](Ora2PgRowCountValidator/README.md)
+
+### Ora2PgPerformanceValidator
+
+Query performance comparison tool that validates execution time between Oracle and PostgreSQL databases.
+
+**Key Features:**
+- ✅ **Paired Query Execution**: Matches SQL files by name from oracle/ and postgres/ directories
+- ✅ **Accurate Timing**: Warmup runs + multiple measurements + median calculation
+- ✅ **Configurable Threshold**: Set acceptable performance difference percentage (default: 50%)
+- ✅ **Generic Parameters**: `{ORACLE_SCHEMA}` and `{POSTGRES_SCHEMA}` placeholders for portability
+- ✅ **8 Generic Queries Included**: Metadata queries (tables, indexes, constraints, views, sequences, etc.)
+- ✅ **Triple Report Formats**: Generates Markdown (.md), HTML (.html), and Plain Text (.txt) reports
+- ✅ **Performance Status**: Passed/Warning/Failed/Row Count Mismatch classification
+
+**Included Generic Queries:**
+1. List all tables and columns
+2. Count total tables
+3. List all indexes
+4. List all constraints
+5. Table statistics (row counts, sizes)
+6. List all sequences
+7. List all views
+8. Complex JOIN with aggregates
+
+**Configuration:**
+```properties
+PERF_WARMUP_RUNS=1              # Warmup executions (default: 1)
+PERF_MEASUREMENT_RUNS=3         # Measurement runs (default: 3)
+PERF_THRESHOLD_PERCENT=50       # Performance difference threshold % (default: 50)
+```
+
+**Dependencies:**
+- References: Ora2Pg.Common
+- NuGet: Oracle.ManagedDataAccess.Core, Npgsql, Serilog.Sinks.Console
+
+📖 **Full Documentation:** See [Ora2PgPerformanceValidator/README.md](Ora2PgPerformanceValidator/README.md) for comprehensive configuration, query examples, and adding custom queries.
 
 ## Requirements
 

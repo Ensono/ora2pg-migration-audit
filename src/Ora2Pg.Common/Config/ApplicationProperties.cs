@@ -102,8 +102,18 @@ public class ApplicationProperties
         
         while (currentDir != null)
         {
+            var srcDir = currentDir.GetDirectories("src").FirstOrDefault();
+            if (srcDir != null && srcDir.GetFiles("*.sln").Any())
+            {
+                return currentDir.FullName;
+            }
+            
             if (currentDir.GetFiles("*.sln").Any())
             {
+                if (currentDir.Name.Equals("src", StringComparison.OrdinalIgnoreCase))
+                {
+                    return currentDir.Parent?.FullName ?? currentDir.FullName;
+                }
                 return currentDir.FullName;
             }
             
@@ -164,5 +174,29 @@ public class ApplicationProperties
             return value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         }
         return Array.Empty<string>();
+    }
+
+    public string GetSolutionRoot()
+    {
+        var currentDir = Directory.GetCurrentDirectory();
+        var solutionRoot = FindSolutionRoot(currentDir);
+        return solutionRoot ?? currentDir;
+    }
+
+    public string GetReportsDirectory(string validatorName)
+    {
+        var solutionRoot = GetSolutionRoot();
+        var validatorDir = Path.Combine(solutionRoot, "src", validatorName);
+        var reportsDir = Path.Combine(validatorDir, "reports");
+        Directory.CreateDirectory(reportsDir);
+        return reportsDir;
+    }
+
+    public string GetReportsDirectory()
+    {
+        var solutionRoot = GetSolutionRoot();
+        var reportsDir = Path.Combine(solutionRoot, "reports");
+        Directory.CreateDirectory(reportsDir);
+        return reportsDir;
     }
 }

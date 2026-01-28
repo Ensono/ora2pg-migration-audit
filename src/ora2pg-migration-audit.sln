@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
-VisualStudioVersion = 18.1.11312.151 d18.0
+VisualStudioVersion = 18.1.11312.151
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ora2PgDataValidator", "Ora2PgDataValidator\Ora2PgDataValidator.csproj", "{DCE65402-9B9A-4426-B1A9-BA937E4046C2}"
 EndProject
@@ -14,6 +14,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ora2PgRowCountValidator", "Ora2PgRowCountValidator\Ora2PgRowCountValidator.csproj", "{51908429-492E-48CF-8810-D392949DEC14}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ora2Pg.Common.Tests", "Ora2Pg.Common.Tests\Ora2Pg.Common.Tests.csproj", "{4F1FA32E-B1CF-9B20-CB3F-D85A6ED15BD6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ora2PgPerformanceValidator", "Ora2PgPerformanceValidator\Ora2PgPerformanceValidator.csproj", "{62FD0355-29CA-44E1-AFD3-EEFA9BEF2DB1}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -97,6 +99,18 @@ Global
 		{4F1FA32E-B1CF-9B20-CB3F-D85A6ED15BD6}.Release|x64.Build.0 = Release|Any CPU
 		{4F1FA32E-B1CF-9B20-CB3F-D85A6ED15BD6}.Release|x86.ActiveCfg = Release|Any CPU
 		{4F1FA32E-B1CF-9B20-CB3F-D85A6ED15BD6}.Release|x86.Build.0 = Release|Any CPU
+		{62FD0355-29CA-44E1-AFD3-EEFA9BEF2DB1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{62FD0355-29CA-44E1-AFD3-EEFA9BEF2DB1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{62FD0355-29CA-44E1-AFD3-EEFA9BEF2DB1}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{62FD0355-29CA-44E1-AFD3-EEFA9BEF2DB1}.Debug|x64.Build.0 = Debug|Any CPU
+		{62FD0355-29CA-44E1-AFD3-EEFA9BEF2DB1}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{62FD0355-29CA-44E1-AFD3-EEFA9BEF2DB1}.Debug|x86.Build.0 = Debug|Any CPU
+		{62FD0355-29CA-44E1-AFD3-EEFA9BEF2DB1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{62FD0355-29CA-44E1-AFD3-EEFA9BEF2DB1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{62FD0355-29CA-44E1-AFD3-EEFA9BEF2DB1}.Release|x64.ActiveCfg = Release|Any CPU
+		{62FD0355-29CA-44E1-AFD3-EEFA9BEF2DB1}.Release|x64.Build.0 = Release|Any CPU
+		{62FD0355-29CA-44E1-AFD3-EEFA9BEF2DB1}.Release|x86.ActiveCfg = Release|Any CPU
+		{62FD0355-29CA-44E1-AFD3-EEFA9BEF2DB1}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

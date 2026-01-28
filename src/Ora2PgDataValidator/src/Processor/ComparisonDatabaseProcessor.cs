@@ -107,9 +107,11 @@ public class ComparisonDatabaseProcessor
         try
         {
             var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            var props = ApplicationProperties.Instance;
+            var reportsDir = props.GetReportsDirectory("Ora2PgDataValidator");
 
             var markdownWriter = new DataValidationMarkdownWriter();
-            var markdownReportPath = $"./reports/data_fingerprint_validation_{timestamp}.md";
+            var markdownReportPath = Path.Combine(reportsDir, $"data_fingerprint_validation_{timestamp}.md");
             markdownWriter.WriteMarkdownReport(allResults, markdownReportPath);
             Log.Information("📄 Markdown report saved to: {ReportPath}", markdownReportPath);
 
@@ -117,7 +119,7 @@ public class ComparisonDatabaseProcessor
             Log.Information("📄 Text report saved to: {ReportPath}", textReportPath);
 
             var htmlWriter = new DataValidationHtmlWriter();
-            var htmlReportPath = $"./reports/data_fingerprint_validation_{timestamp}.html";
+            var htmlReportPath = Path.Combine(reportsDir, $"data_fingerprint_validation_{timestamp}.html");
             htmlWriter.WriteHtmlReport(allResults, htmlReportPath);
             Log.Information("📄 HTML report saved to: {ReportPath}", htmlReportPath);
         }
