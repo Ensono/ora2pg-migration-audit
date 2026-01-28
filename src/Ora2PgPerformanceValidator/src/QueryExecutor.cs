@@ -8,6 +8,8 @@ namespace Ora2PgPerformanceValidator.Executors;
 
 public class QueryExecutor
 {
+    private const int DefaultCommandTimeoutSeconds = 300;
+    
     private readonly string _oracleConnectionString;
     private readonly string _postgresConnectionString;
     private readonly ILogger _logger = Log.ForContext<QueryExecutor>();
@@ -83,7 +85,7 @@ public class QueryExecutor
             await using var warmupConn = new OracleConnection(_oracleConnectionString);
             await warmupConn.OpenAsync();
             await using var warmupCmd = new OracleCommand(query, warmupConn);
-            warmupCmd.CommandTimeout = 300;
+            warmupCmd.CommandTimeout = DefaultCommandTimeoutSeconds;
             await warmupCmd.ExecuteNonQueryAsync();
         }
 
@@ -95,7 +97,7 @@ public class QueryExecutor
             await using var conn = new OracleConnection(_oracleConnectionString);
             await conn.OpenAsync();
             await using var cmd = new OracleCommand(query, conn);
-            cmd.CommandTimeout = 300;
+            cmd.CommandTimeout = DefaultCommandTimeoutSeconds;
 
             var sw = Stopwatch.StartNew();
             
@@ -121,7 +123,7 @@ public class QueryExecutor
             await using var warmupConn = new NpgsqlConnection(_postgresConnectionString);
             await warmupConn.OpenAsync();
             await using var warmupCmd = new NpgsqlCommand(query, warmupConn);
-            warmupCmd.CommandTimeout = 300;
+            warmupCmd.CommandTimeout = DefaultCommandTimeoutSeconds;
             await warmupCmd.ExecuteNonQueryAsync();
         }
 
@@ -133,7 +135,7 @@ public class QueryExecutor
             await using var conn = new NpgsqlConnection(_postgresConnectionString);
             await conn.OpenAsync();
             await using var cmd = new NpgsqlCommand(query, conn);
-            cmd.CommandTimeout = 300;
+            cmd.CommandTimeout = DefaultCommandTimeoutSeconds;
 
             var sw = Stopwatch.StartNew();
             

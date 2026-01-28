@@ -102,18 +102,18 @@ public class ApplicationProperties
         
         while (currentDir != null)
         {
+            var srcDir = currentDir.GetDirectories("src").FirstOrDefault();
+            if (srcDir != null && srcDir.GetFiles("*.sln").Any())
+            {
+                return currentDir.FullName;
+            }
+            
             if (currentDir.GetFiles("*.sln").Any())
             {
                 if (currentDir.Name.Equals("src", StringComparison.OrdinalIgnoreCase))
                 {
                     return currentDir.Parent?.FullName ?? currentDir.FullName;
                 }
-                return currentDir.FullName;
-            }
-            
-            var srcDir = currentDir.GetDirectories("src").FirstOrDefault();
-            if (srcDir != null && srcDir.GetFiles("*.sln").Any())
-            {
                 return currentDir.FullName;
             }
             
