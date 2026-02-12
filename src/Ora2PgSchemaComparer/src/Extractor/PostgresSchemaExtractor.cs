@@ -209,21 +209,48 @@ public class PostgresSchemaExtractor
         connection.Open();
         
         var query = @"
-            SELECT tc.constraint_name, tc.table_name,
-                   ccu.table_schema as ref_schema, ccu.table_name as ref_table,
-                   rc.delete_rule, rc.update_rule,
-                   CASE WHEN con.condeferrable THEN true ELSE false END as is_deferrable,
-                   CASE WHEN con.condeferred THEN true ELSE false END as is_initially_deferred,
-                   string_agg(DISTINCT kcu.column_name, ',' ORDER BY kcu.column_name) as columns,
-                   string_agg(DISTINCT ccu.column_name, ',' ORDER BY ccu.column_name) as ref_columns
-            FROM information_schema.table_constraints tc
-            JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.constraint_schema = kcu.constraint_schema
-            JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name AND tc.constraint_schema = ccu.constraint_schema
-            JOIN information_schema.referential_constraints rc ON tc.constraint_name = rc.constraint_name AND tc.constraint_schema = rc.constraint_schema
-            JOIN pg_catalog.pg_constraint con ON tc.constraint_name = con.conname
-            WHERE tc.constraint_schema = $1 AND tc.constraint_type = 'FOREIGN KEY'
-            GROUP BY tc.constraint_name, tc.table_name, ccu.table_schema, ccu.table_name, rc.delete_rule, rc.update_rule, con.condeferrable, con.condeferred
-            ORDER BY tc.table_name";
+            SELECT 
+                con.conname as constraint_name,
+                tn.nspname as schema_name,
+                t.relname as table_name,
+                rn.nspname as ref_schema,
+                rt.relname as ref_table,
+                CASE con.confdeltype
+                    WHEN 'a' THEN 'NO ACTION'
+                    WHEN 'r' THEN 'RESTRICT'
+                    WHEN 'c' THEN 'CASCADE'
+                    WHEN 'n' THEN 'SET NULL'
+                    WHEN 'd' THEN 'SET DEFAULT'
+                END as delete_rule,
+                CASE con.confupdtype
+                    WHEN 'a' THEN 'NO ACTION'
+                    WHEN 'r' THEN 'RESTRICT'
+                    WHEN 'c' THEN 'CASCADE'
+                    WHEN 'n' THEN 'SET NULL'
+                    WHEN 'd' THEN 'SET DEFAULT'
+                END as update_rule,
+                con.condeferrable as is_deferrable,
+                con.condeferred as is_initially_deferred,
+                array_to_string(ARRAY(
+                    SELECT a.attname 
+                    FROM unnest(con.conkey) WITH ORDINALITY AS u(attnum, ord)
+                    JOIN pg_attribute a ON a.attnum = u.attnum AND a.attrelid = con.conrelid
+                    ORDER BY u.ord
+                ), ',') as columns,
+                array_to_string(ARRAY(
+                    SELECT a.attname 
+                    FROM unnest(con.confkey) WITH ORDINALITY AS u(attnum, ord)
+                    JOIN pg_attribute a ON a.attnum = u.attnum AND a.attrelid = con.confrelid
+                    ORDER BY u.ord
+                ), ',') as ref_columns
+            FROM pg_catalog.pg_constraint con
+            JOIN pg_catalog.pg_class t ON t.oid = con.conrelid
+            JOIN pg_catalog.pg_namespace tn ON tn.oid = t.relnamespace
+            JOIN pg_catalog.pg_class rt ON rt.oid = con.confrelid
+            JOIN pg_catalog.pg_namespace rn ON rn.oid = rt.relnamespace
+            WHERE con.contype = 'f'
+              AND tn.nspname = $1
+            ORDER BY t.relname, con.conname";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
         cmd.CommandTimeout = CommandTimeoutSeconds;
