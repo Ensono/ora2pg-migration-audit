@@ -12,6 +12,7 @@ public class PostgresSchemaExtractor
     private readonly ILogger _logger = Log.ForContext<PostgresSchemaExtractor>();
     private readonly DatabaseConnectionManager _connectionManager;
     private readonly HashSet<string> _columnsToSkip;
+    private const int CommandTimeoutSeconds = 240;
 
     public PostgresSchemaExtractor(DatabaseConnectionManager connectionManager)
     {
@@ -69,6 +70,7 @@ public class PostgresSchemaExtractor
             ORDER BY t.table_name";
 
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
 
         using var reader = cmd.ExecuteReader();
@@ -106,6 +108,7 @@ public class PostgresSchemaExtractor
             ORDER BY c.ordinal_position";
 
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         cmd.Parameters.AddWithValue(tableName.ToLower());
 
@@ -179,6 +182,7 @@ public class PostgresSchemaExtractor
             ORDER BY tc.table_name";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();
@@ -222,6 +226,7 @@ public class PostgresSchemaExtractor
             ORDER BY tc.table_name";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();
@@ -266,6 +271,7 @@ public class PostgresSchemaExtractor
             ORDER BY tc.table_name";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();
@@ -299,6 +305,7 @@ public class PostgresSchemaExtractor
             ORDER BY tc.table_name";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();
@@ -338,6 +345,7 @@ public class PostgresSchemaExtractor
             ORDER BY i.tablename, i.indexname";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();
@@ -376,6 +384,7 @@ public class PostgresSchemaExtractor
             ORDER BY sequence_name";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();
@@ -407,6 +416,7 @@ public class PostgresSchemaExtractor
             
             var query = "SELECT table_name FROM information_schema.views WHERE table_schema = $1 ORDER BY table_name";
             using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+            cmd.CommandTimeout = CommandTimeoutSeconds;
             cmd.Parameters.AddWithValue(schemaName.ToLower());
             
             using var reader = cmd.ExecuteReader();
@@ -432,6 +442,7 @@ public class PostgresSchemaExtractor
                 WHERE schemaname = $1 
                 ORDER BY matviewname";
             using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+            cmd.CommandTimeout = CommandTimeoutSeconds;
             cmd.Parameters.AddWithValue(schemaName.ToLower());
             
             using var reader = cmd.ExecuteReader();
@@ -463,6 +474,7 @@ public class PostgresSchemaExtractor
             ORDER BY event_object_table, trigger_name";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();
@@ -496,6 +508,7 @@ public class PostgresSchemaExtractor
             ORDER BY routine_name";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();
