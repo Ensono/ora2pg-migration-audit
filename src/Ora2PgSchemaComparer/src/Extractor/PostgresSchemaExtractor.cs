@@ -211,7 +211,6 @@ public class PostgresSchemaExtractor
         var query = @"
             SELECT 
                 con.conname as constraint_name,
-                tn.nspname as schema_name,
                 t.relname as table_name,
                 rn.nspname as ref_schema,
                 rt.relname as ref_table,
