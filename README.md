@@ -207,8 +207,134 @@ This gives you a complete validation covering:
 - ✅ Query performance (execution time comparisons)
 - ✅ Data integrity (hash fingerprinting)
 
-## Projects
+## Automated Validation (PowerShell Script)
 
+For convenience, a PowerShell script is provided to automate building and running all five validators in the recommended sequence.
+
+### Script: `run-all-validators.ps1`
+
+**Location:** Solution root directory
+
+**Features:**
+- ✅ Automatically builds the entire solution
+- ✅ Runs all five validators in the optimal order
+- ✅ Checks prerequisites (.env file, .NET SDK)
+- ✅ Color-coded output with status indicators
+- ✅ Execution timing for each validator
+- ✅ Summary report with pass/fail counts
+- ✅ Proper error handling and exit codes
+- ✅ Optional roll-forward support for .NET version compatibility
+
+### Usage
+
+**Basic Usage (Standard Execution):**
+
+```powershell
+# From solution root
+./run-all-validators.ps1
+```
+
+**With .NET Roll-Forward Policy:**
+
+Use the `-RollForward` parameter when your system has a higher version of .NET installed than the project targets (e.g., .NET 9.x when project targets .NET 8.0).
+
+```powershell
+# Roll forward to next major version (e.g., .NET 8.x → .NET 9.x)
+./run-all-validators.ps1 -RollForward Major
+
+# Roll forward to next minor version (e.g., .NET 8.0 → .NET 8.1)
+./run-all-validators.ps1 -RollForward Minor
+```
+
+**Platform-Specific Instructions:**
+
+```bash
+# Windows (PowerShell)
+.\run-all-validators.ps1
+
+# Windows (cmd.exe)
+pwsh run-all-validators.ps1
+
+# macOS/Linux (with PowerShell Core installed)
+# Make executable (first time only)
+chmod +x run-all-validators.ps1
+
+# Run
+./run-all-validators.ps1
+
+# Or explicitly with pwsh
+pwsh run-all-validators.ps1
+```
+
+### Execution Order
+
+The script runs validators in this optimized sequence:
+
+1. **SchemaComparer** → Validates schema structure (tables, columns, constraints, indexes)
+2. **RowCountValidator** → Validates row counts match between databases
+3. **DataTypeValidator** → Validates data type mappings are correct
+4. **PerformanceValidator** → Validates query performance benchmarks
+5. **DataValidator** → Validates data integrity using hash fingerprinting
+
+### Output Example
+
+```
+╔═══════════════════════════════════════════════════════════════╗
+║  Oracle to PostgreSQL Migration Validation Suite             ║
+╚═══════════════════════════════════════════════════════════════╝
+
+✓ Found .env configuration file
+✓ .NET SDK version: 8.0.100
+
+═══════════════════════════════════════════════════════════════
+  Building Solution
+═══════════════════════════════════════════════════════════════
+
+✓ Solution built successfully
+
+═══════════════════════════════════════════════════════════════
+  Running SchemaComparer
+═══════════════════════════════════════════════════════════════
+
+✓ SchemaComparer completed successfully (12.34s)
+
+═══════════════════════════════════════════════════════════════
+  Validation Summary
+═══════════════════════════════════════════════════════════════
+
+Total execution time: 67.89s
+
+✓ SchemaComparer              12.34s Success
+✓ RowCountValidator           8.12s Success
+✓ DataTypeValidator           5.67s Success
+✓ PerformanceValidator        23.45s Success
+✓ DataValidator               18.31s Success
+
+Results: 5 passed, 0 failed
+
+✓ All validators completed successfully!
+```
+
+### Prerequisites
+
+- **PowerShell:** Windows PowerShell 5.1+ or PowerShell Core 7.0+
+- **.NET SDK:** 8.0 or higher
+- **Configuration:** `.env` file must be configured at solution root
+
+### Exit Codes
+
+- `0` - All validators completed successfully
+- `1` - One or more validators failed or prerequisites not met
+
+### Notes
+
+- The script uses `--no-build` for individual project execution (only builds once at start)
+- All output from validators is displayed in real-time
+- Each validator runs sequentially (not in parallel) to ensure clear output and proper resource usage
+- Reports are generated in each project's directory as configured
+
+## Projects
+cd ..
 ### Ora2Pg.Common (Shared Library)
 
 **Purpose:** Centralized code library shared across all validators to eliminate duplication.
@@ -371,6 +497,8 @@ PERF_THRESHOLD_PERCENT=50       # Performance difference threshold % (default: 5
 - .NET 8.0 SDK or higher
 - Oracle Database access
 - PostgreSQL Database access
+- PowerShell 7.0+ (PowerShell Core) - Required for automated validation script (`run-all-validators.ps1`)
+  - macOS/Linux: Install [PowerShell Core](https://docs.microsoft.com/en-us/powershell/scripting/install/installing-powershell)
 
 
 ## License

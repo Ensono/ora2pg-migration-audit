@@ -12,6 +12,7 @@ public class PostgresSchemaExtractor
     private readonly ILogger _logger = Log.ForContext<PostgresSchemaExtractor>();
     private readonly DatabaseConnectionManager _connectionManager;
     private readonly HashSet<string> _columnsToSkip;
+    private const int CommandTimeoutSeconds = 240;
 
     public PostgresSchemaExtractor(DatabaseConnectionManager connectionManager)
     {
@@ -61,14 +62,17 @@ public class PostgresSchemaExtractor
         connection.Open();
 
         var query = @"
-            SELECT t.table_name,
-                   pg_catalog.obj_description((quote_ident(t.table_schema)||'.'||quote_ident(t.table_name))::regclass, 'pg_class') as table_comment,
-                   EXISTS(SELECT 1 FROM pg_catalog.pg_partitioned_table WHERE partrelid = (quote_ident(t.table_schema)||'.'||quote_ident(t.table_name))::regclass) as is_partitioned
-            FROM information_schema.tables t
-            WHERE t.table_schema = $1 AND t.table_type = 'BASE TABLE'
-            ORDER BY t.table_name";
+            SELECT c.relname as table_name,
+                   pg_catalog.obj_description(c.oid, 'pg_class') as table_comment,
+                   c.relispartition OR EXISTS(SELECT 1 FROM pg_catalog.pg_partitioned_table WHERE partrelid = c.oid) as is_partitioned
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 
+              AND c.relkind = 'r'
+            ORDER BY c.relname";
 
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
 
         using var reader = cmd.ExecuteReader();
@@ -97,15 +101,28 @@ public class PostgresSchemaExtractor
         connection.Open();
 
         var query = @"
-            SELECT c.column_name, c.ordinal_position, c.data_type,
-                   c.character_maximum_length, c.numeric_precision, c.numeric_scale,
-                   c.is_nullable, c.column_default,
-                   pg_catalog.col_description((quote_ident(c.table_schema)||'.'||quote_ident(c.table_name))::regclass, c.ordinal_position) as column_comment
-            FROM information_schema.columns c
-            WHERE c.table_schema = $1 AND c.table_name = $2
-            ORDER BY c.ordinal_position";
+            SELECT a.attname as column_name,
+                   a.attnum as ordinal_position,
+                   pg_catalog.format_type(a.atttypid, a.atttypmod) as data_type,
+                   CASE WHEN t.typname IN ('varchar', 'char', 'bpchar') THEN a.atttypmod - 4 ELSE NULL END as character_maximum_length,
+                   CASE WHEN t.typname IN ('numeric', 'decimal') THEN ((a.atttypmod - 4) >> 16) & 65535 ELSE NULL END as numeric_precision,
+                   CASE WHEN t.typname IN ('numeric', 'decimal') THEN (a.atttypmod - 4) & 65535 ELSE NULL END as numeric_scale,
+                   NOT a.attnotnull as is_nullable,
+                   pg_catalog.pg_get_expr(d.adbin, d.adrelid) as column_default,
+                   pg_catalog.col_description(c.oid, a.attnum) as column_comment
+            FROM pg_catalog.pg_attribute a
+            JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_catalog.pg_type t ON t.oid = a.atttypid
+            LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+            WHERE n.nspname = $1 
+              AND c.relname = $2
+              AND a.attnum > 0 
+              AND NOT a.attisdropped
+            ORDER BY a.attnum";
 
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         cmd.Parameters.AddWithValue(tableName.ToLower());
 
@@ -133,7 +150,7 @@ public class PostgresSchemaExtractor
                 DataLength = reader.IsDBNull(3) ? null : reader.GetInt32(3),
                 DataPrecision = reader.IsDBNull(4) ? null : reader.GetInt32(4),
                 DataScale = reader.IsDBNull(5) ? null : reader.GetInt32(5),
-                IsNullable = reader.GetString(6) == "YES",
+                IsNullable = reader.GetBoolean(6),
                 DefaultValue = reader.IsDBNull(7) ? null : reader.GetString(7),
                 ColumnComment = reader.IsDBNull(8) ? null : reader.GetString(8)
             });
@@ -168,17 +185,23 @@ public class PostgresSchemaExtractor
         connection.Open();
         
         var query = @"
-            SELECT tc.constraint_name, tc.table_name,
-                   string_agg(kcu.column_name, ',' ORDER BY kcu.ordinal_position) as columns
-            FROM information_schema.table_constraints tc
-            JOIN information_schema.key_column_usage kcu 
-                ON tc.constraint_schema = kcu.constraint_schema 
-                AND tc.constraint_name = kcu.constraint_name
-            WHERE tc.constraint_schema = $1 AND tc.constraint_type = 'PRIMARY KEY'
-            GROUP BY tc.constraint_name, tc.table_name
-            ORDER BY tc.table_name";
+            SELECT con.conname as constraint_name,
+                   t.relname as table_name,
+                   array_to_string(ARRAY(
+                       SELECT a.attname 
+                       FROM unnest(con.conkey) WITH ORDINALITY AS u(attnum, ord)
+                       JOIN pg_attribute a ON a.attnum = u.attnum AND a.attrelid = con.conrelid
+                       ORDER BY u.ord
+                   ), ',') as columns
+            FROM pg_catalog.pg_constraint con
+            JOIN pg_catalog.pg_class t ON t.oid = con.conrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+            WHERE con.contype = 'p'
+              AND n.nspname = $1
+            ORDER BY t.relname, con.conname";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();
@@ -205,23 +228,50 @@ public class PostgresSchemaExtractor
         connection.Open();
         
         var query = @"
-            SELECT tc.constraint_name, tc.table_name,
-                   ccu.table_schema as ref_schema, ccu.table_name as ref_table,
-                   rc.delete_rule, rc.update_rule,
-                   CASE WHEN con.condeferrable THEN true ELSE false END as is_deferrable,
-                   CASE WHEN con.condeferred THEN true ELSE false END as is_initially_deferred,
-                   string_agg(DISTINCT kcu.column_name, ',' ORDER BY kcu.column_name) as columns,
-                   string_agg(DISTINCT ccu.column_name, ',' ORDER BY ccu.column_name) as ref_columns
-            FROM information_schema.table_constraints tc
-            JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.constraint_schema = kcu.constraint_schema
-            JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name AND tc.constraint_schema = ccu.constraint_schema
-            JOIN information_schema.referential_constraints rc ON tc.constraint_name = rc.constraint_name AND tc.constraint_schema = rc.constraint_schema
-            JOIN pg_catalog.pg_constraint con ON tc.constraint_name = con.conname
-            WHERE tc.constraint_schema = $1 AND tc.constraint_type = 'FOREIGN KEY'
-            GROUP BY tc.constraint_name, tc.table_name, ccu.table_schema, ccu.table_name, rc.delete_rule, rc.update_rule, con.condeferrable, con.condeferred
-            ORDER BY tc.table_name";
+            SELECT 
+                con.conname as constraint_name,
+                t.relname as table_name,
+                rn.nspname as ref_schema,
+                rt.relname as ref_table,
+                CASE con.confdeltype
+                    WHEN 'a' THEN 'NO ACTION'
+                    WHEN 'r' THEN 'RESTRICT'
+                    WHEN 'c' THEN 'CASCADE'
+                    WHEN 'n' THEN 'SET NULL'
+                    WHEN 'd' THEN 'SET DEFAULT'
+                END as delete_rule,
+                CASE con.confupdtype
+                    WHEN 'a' THEN 'NO ACTION'
+                    WHEN 'r' THEN 'RESTRICT'
+                    WHEN 'c' THEN 'CASCADE'
+                    WHEN 'n' THEN 'SET NULL'
+                    WHEN 'd' THEN 'SET DEFAULT'
+                END as update_rule,
+                con.condeferrable as is_deferrable,
+                con.condeferred as is_initially_deferred,
+                array_to_string(ARRAY(
+                    SELECT a.attname 
+                    FROM unnest(con.conkey) WITH ORDINALITY AS u(attnum, ord)
+                    JOIN pg_attribute a ON a.attnum = u.attnum AND a.attrelid = con.conrelid
+                    ORDER BY u.ord
+                ), ',') as columns,
+                array_to_string(ARRAY(
+                    SELECT a.attname 
+                    FROM unnest(con.confkey) WITH ORDINALITY AS u(attnum, ord)
+                    JOIN pg_attribute a ON a.attnum = u.attnum AND a.attrelid = con.confrelid
+                    ORDER BY u.ord
+                ), ',') as ref_columns
+            FROM pg_catalog.pg_constraint con
+            JOIN pg_catalog.pg_class t ON t.oid = con.conrelid
+            JOIN pg_catalog.pg_namespace tn ON tn.oid = t.relnamespace
+            JOIN pg_catalog.pg_class rt ON rt.oid = con.confrelid
+            JOIN pg_catalog.pg_namespace rn ON rn.oid = rt.relnamespace
+            WHERE con.contype = 'f'
+              AND tn.nspname = $1
+            ORDER BY t.relname, con.conname";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();
@@ -255,17 +305,23 @@ public class PostgresSchemaExtractor
         connection.Open();
         
         var query = @"
-            SELECT tc.constraint_name, tc.table_name,
-                   string_agg(kcu.column_name, ',' ORDER BY kcu.ordinal_position) as columns
-            FROM information_schema.table_constraints tc
-            JOIN information_schema.key_column_usage kcu 
-                ON tc.constraint_schema = kcu.constraint_schema 
-                AND tc.constraint_name = kcu.constraint_name
-            WHERE tc.constraint_schema = $1 AND tc.constraint_type = 'UNIQUE'
-            GROUP BY tc.constraint_name, tc.table_name
-            ORDER BY tc.table_name";
+            SELECT con.conname as constraint_name,
+                   t.relname as table_name,
+                   array_to_string(ARRAY(
+                       SELECT a.attname 
+                       FROM unnest(con.conkey) WITH ORDINALITY AS u(attnum, ord)
+                       JOIN pg_attribute a ON a.attnum = u.attnum AND a.attrelid = con.conrelid
+                       ORDER BY u.ord
+                   ), ',') as columns
+            FROM pg_catalog.pg_constraint con
+            JOIN pg_catalog.pg_class t ON t.oid = con.conrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+            WHERE con.contype = 'u'
+              AND n.nspname = $1
+            ORDER BY t.relname, con.conname";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();
@@ -292,13 +348,18 @@ public class PostgresSchemaExtractor
         connection.Open();
         
         var query = @"
-            SELECT tc.constraint_name, tc.table_name, cc.check_clause
-            FROM information_schema.table_constraints tc
-            JOIN information_schema.check_constraints cc ON tc.constraint_name = cc.constraint_name AND tc.constraint_schema = cc.constraint_schema
-            WHERE tc.constraint_schema = $1 AND tc.constraint_type = 'CHECK'
-            ORDER BY tc.table_name";
+            SELECT con.conname as constraint_name,
+                   t.relname as table_name,
+                   pg_catalog.pg_get_constraintdef(con.oid, true) as check_clause
+            FROM pg_catalog.pg_constraint con
+            JOIN pg_catalog.pg_class t ON t.oid = con.conrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+            WHERE con.contype = 'c'
+              AND n.nspname = $1
+            ORDER BY t.relname, con.conname";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();
@@ -325,19 +386,25 @@ public class PostgresSchemaExtractor
         connection.Open();
         
         var query = @"
-            SELECT i.indexname, i.tablename, am.amname, idx.indisunique
-            FROM pg_indexes i
-            JOIN pg_class c ON c.relname = i.indexname
-            JOIN pg_index idx ON idx.indexrelid = c.oid
-            JOIN pg_am am ON am.oid = c.relam
-            WHERE i.schemaname = $1
-            AND i.indexname NOT IN (
-                SELECT constraint_name FROM information_schema.table_constraints 
-                WHERE constraint_schema = $1 AND constraint_type IN ('PRIMARY KEY', 'UNIQUE')
-            )
-            ORDER BY i.tablename, i.indexname";
+            SELECT ic.relname as indexname,
+                   t.relname as tablename,
+                   am.amname,
+                   idx.indisunique
+            FROM pg_catalog.pg_index idx
+            JOIN pg_catalog.pg_class ic ON ic.oid = idx.indexrelid
+            JOIN pg_catalog.pg_class t ON t.oid = idx.indrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+            JOIN pg_catalog.pg_am am ON am.oid = ic.relam
+            WHERE n.nspname = $1
+              AND NOT idx.indisprimary
+              AND NOT EXISTS (
+                  SELECT 1 FROM pg_catalog.pg_constraint con 
+                  WHERE con.conindid = idx.indexrelid AND con.contype IN ('u')
+              )
+            ORDER BY t.relname, ic.relname";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();
@@ -370,12 +437,13 @@ public class PostgresSchemaExtractor
         connection.Open();
         
         var query = @"
-            SELECT sequence_name, start_value, increment, minimum_value, maximum_value, cycle_option
-            FROM information_schema.sequences
-            WHERE sequence_schema = $1
-            ORDER BY sequence_name";
+            SELECT sequencename, start_value, increment_by, min_value, max_value, cycle
+            FROM pg_catalog.pg_sequences
+            WHERE schemaname = $1
+            ORDER BY sequencename";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();
@@ -389,7 +457,7 @@ public class PostgresSchemaExtractor
                 IncrementBy = reader.IsDBNull(2) ? null : reader.GetInt64(2),
                 MinValue = reader.IsDBNull(3) ? null : reader.GetInt64(3),
                 MaxValue = reader.IsDBNull(4) ? null : reader.GetInt64(4),
-                IsCycle = reader.GetString(5) == "YES"
+                IsCycle = reader.GetBoolean(5)
             });
         }
         
@@ -405,8 +473,14 @@ public class PostgresSchemaExtractor
         {
             connection.Open();
             
-            var query = "SELECT table_name FROM information_schema.views WHERE table_schema = $1 ORDER BY table_name";
+            var query = @"
+                SELECT c.relname 
+                FROM pg_catalog.pg_class c
+                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = $1 AND c.relkind = 'v'
+                ORDER BY c.relname";
             using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+            cmd.CommandTimeout = CommandTimeoutSeconds;
             cmd.Parameters.AddWithValue(schemaName.ToLower());
             
             using var reader = cmd.ExecuteReader();
@@ -432,6 +506,7 @@ public class PostgresSchemaExtractor
                 WHERE schemaname = $1 
                 ORDER BY matviewname";
             using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+            cmd.CommandTimeout = CommandTimeoutSeconds;
             cmd.Parameters.AddWithValue(schemaName.ToLower());
             
             using var reader = cmd.ExecuteReader();
@@ -457,12 +532,24 @@ public class PostgresSchemaExtractor
         connection.Open();
         
         var query = @"
-            SELECT trigger_name, event_object_table, event_manipulation, action_timing
-            FROM information_schema.triggers
-            WHERE trigger_schema = $1
-            ORDER BY event_object_table, trigger_name";
+            SELECT tg.tgname as trigger_name,
+                   t.relname as table_name,
+                   CASE 
+                       WHEN tg.tgtype & 4 = 4 THEN 'INSERT'
+                       WHEN tg.tgtype & 8 = 8 THEN 'DELETE'
+                       WHEN tg.tgtype & 16 = 16 THEN 'UPDATE'
+                       ELSE 'UNKNOWN'
+                   END as event_manipulation,
+                   CASE WHEN tg.tgtype & 2 = 2 THEN 'BEFORE' ELSE 'AFTER' END as action_timing
+            FROM pg_catalog.pg_trigger tg
+            JOIN pg_catalog.pg_class t ON t.oid = tg.tgrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+            WHERE n.nspname = $1
+              AND NOT tg.tgisinternal
+            ORDER BY t.relname, tg.tgname";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();
@@ -490,12 +577,17 @@ public class PostgresSchemaExtractor
         connection.Open();
         
         var query = @"
-            SELECT routine_name, routine_type, data_type
-            FROM information_schema.routines
-            WHERE routine_schema = $1
-            ORDER BY routine_name";
+            SELECT p.proname as routine_name,
+                   CASE WHEN p.prokind = 'p' THEN 'PROCEDURE' ELSE 'FUNCTION' END as routine_type,
+                   pg_catalog.format_type(p.prorettype, NULL) as return_type
+            FROM pg_catalog.pg_proc p
+            JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = $1
+              AND p.prokind IN ('f', 'p')
+            ORDER BY p.proname";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         cmd.Parameters.AddWithValue(schemaName.ToLower());
         
         using var reader = cmd.ExecuteReader();

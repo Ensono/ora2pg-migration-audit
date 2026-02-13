@@ -5,10 +5,10 @@ public class SequenceDefinition
 {
     public string SequenceName { get; set; } = string.Empty;
     public string SchemaName { get; set; } = string.Empty;
-    public long? CurrentValue { get; set; }
+    public decimal? CurrentValue { get; set; }
     public long? IncrementBy { get; set; }
     public long? MinValue { get; set; }
-    public long? MaxValue { get; set; }
+    public decimal? MaxValue { get; set; }
     public bool? IsCycle { get; set; }
     public int? CacheSize { get; set; }
     

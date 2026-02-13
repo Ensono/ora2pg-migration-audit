@@ -397,10 +397,10 @@ public class OracleSchemaExtractor
             {
                 SequenceName = reader.GetString(0),
                 SchemaName = schemaName.ToUpper(),
-                CurrentValue = reader.IsDBNull(1) ? null : reader.GetInt64(1),
+                CurrentValue = reader.IsDBNull(1) ? null : reader.GetDecimal(1),
                 IncrementBy = reader.IsDBNull(2) ? null : reader.GetInt64(2),
                 MinValue = reader.IsDBNull(3) ? null : reader.GetInt64(3),
-                MaxValue = reader.IsDBNull(4) ? null : reader.GetInt64(4),
+                MaxValue = reader.IsDBNull(4) ? null : reader.GetDecimal(4),
                 IsCycle = reader.GetString(5) == "Y",
                 CacheSize = reader.IsDBNull(6) ? null : Convert.ToInt32(reader.GetValue(6))
             });
