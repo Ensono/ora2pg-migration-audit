@@ -130,6 +130,21 @@ nano .env
 
 **Note**: The `.env` file is now located at the **solution root** and is shared by all validators. This provides a single source of truth for database connection configuration.
 
+### Table/Object Filtering (All Validators)
+
+You can exclude tables and other schema objects from validation runs using two optional settings:
+
+```dotenv
+# Exclude tables if their name contains any of these substrings
+TABLE_EXCLUSION_PATTERNS=_bk,_bkup,_tmp
+
+# Exclude specific objects by type (comma-separated key=value pairs)
+IGNORED_OBJECTS=table=ignored_table,procedure=ignored_sproc
+```
+
+**Supported ignored object keys:**
+`table`, `view`, `materialized_view`, `sequence`, `trigger`, `index`, `procedure`, `function`, `package`
+
 ### 2. Build and Run
 
 **From Solution Root:**

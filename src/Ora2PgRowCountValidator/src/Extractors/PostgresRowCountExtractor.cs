@@ -1,6 +1,7 @@
 using Npgsql;
 using Ora2PgRowCountValidator.Models;
 using Serilog;
+using Ora2Pg.Common.Util;
 
 namespace Ora2PgRowCountValidator.Extractors;
 
@@ -37,6 +38,16 @@ public class PostgresRowCountExtractor
                 tableNames.Add(reader.GetString(0));
             }
         }
+
+        var objectFilter = ObjectFilter.FromProperties();
+        var filteredTables = objectFilter.FilterTables(tableNames, schemaName);
+        var excludedCount = tableNames.Count - filteredTables.Count;
+        if (excludedCount > 0)
+        {
+            Log.Information("Excluded {Count} PostgreSQL table(s) from row count extraction", excludedCount);
+        }
+
+        tableNames = filteredTables;
 
         Log.Information($"Found {tableNames.Count} tables in PostgreSQL schema {schemaName}");
 
