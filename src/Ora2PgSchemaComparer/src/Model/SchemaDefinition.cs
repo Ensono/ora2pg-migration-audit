@@ -6,6 +6,7 @@ public class SchemaDefinition
     public string DatabaseType { get; set; } = string.Empty; // "Oracle" or "PostgreSQL"
 
     public List<TableDefinition> Tables { get; set; } = new();
+    public List<PartitionMetadata> Partitions { get; set; } = new();
     public List<ConstraintDefinition> Constraints { get; set; } = new();
     public List<IndexDefinition> Indexes { get; set; } = new();
     public List<SequenceDefinition> Sequences { get; set; } = new();

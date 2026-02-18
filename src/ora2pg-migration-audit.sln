@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ora2PgDataValidator", "Ora2
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ora2PgSchemaComparer", "Ora2PgSchemaComparer\Ora2PgSchemaComparer.csproj", "{EA202726-C8AA-4A2B-B85A-FEE0B075C597}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ora2PgSchemaComparer.Tests", "Ora2PgSchemaComparer.Tests\Ora2PgSchemaComparer.Tests.csproj", "{B7E2C2F1-0C39-4E9E-9A2C-0D4B8EA7F7BE}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ora2Pg.Common", "Ora2Pg.Common\Ora2Pg.Common.csproj", "{4BB5E0EC-1E0E-46D9-B0A3-B0FF5EF59CA8}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ora2PgDataTypeValidator", "Ora2PgDataTypeValidator\Ora2PgDataTypeValidator.csproj", "{D8E49F95-D257-4A1F-AF21-E3366E557834}"
@@ -51,6 +53,18 @@ Global
 		{EA202726-C8AA-4A2B-B85A-FEE0B075C597}.Release|x64.Build.0 = Release|Any CPU
 		{EA202726-C8AA-4A2B-B85A-FEE0B075C597}.Release|x86.ActiveCfg = Release|Any CPU
 		{EA202726-C8AA-4A2B-B85A-FEE0B075C597}.Release|x86.Build.0 = Release|Any CPU
+		{B7E2C2F1-0C39-4E9E-9A2C-0D4B8EA7F7BE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B7E2C2F1-0C39-4E9E-9A2C-0D4B8EA7F7BE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B7E2C2F1-0C39-4E9E-9A2C-0D4B8EA7F7BE}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{B7E2C2F1-0C39-4E9E-9A2C-0D4B8EA7F7BE}.Debug|x64.Build.0 = Debug|Any CPU
+		{B7E2C2F1-0C39-4E9E-9A2C-0D4B8EA7F7BE}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{B7E2C2F1-0C39-4E9E-9A2C-0D4B8EA7F7BE}.Debug|x86.Build.0 = Debug|Any CPU
+		{B7E2C2F1-0C39-4E9E-9A2C-0D4B8EA7F7BE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B7E2C2F1-0C39-4E9E-9A2C-0D4B8EA7F7BE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B7E2C2F1-0C39-4E9E-9A2C-0D4B8EA7F7BE}.Release|x64.ActiveCfg = Release|Any CPU
+		{B7E2C2F1-0C39-4E9E-9A2C-0D4B8EA7F7BE}.Release|x64.Build.0 = Release|Any CPU
+		{B7E2C2F1-0C39-4E9E-9A2C-0D4B8EA7F7BE}.Release|x86.ActiveCfg = Release|Any CPU
+		{B7E2C2F1-0C39-4E9E-9A2C-0D4B8EA7F7BE}.Release|x86.Build.0 = Release|Any CPU
 		{4BB5E0EC-1E0E-46D9-B0A3-B0FF5EF59CA8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{4BB5E0EC-1E0E-46D9-B0A3-B0FF5EF59CA8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4BB5E0EC-1E0E-46D9-B0A3-B0FF5EF59CA8}.Debug|x64.ActiveCfg = Debug|Any CPU

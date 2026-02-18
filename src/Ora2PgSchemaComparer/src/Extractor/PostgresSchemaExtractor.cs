@@ -5,6 +5,7 @@ using Ora2Pg.Common.Connection;
 using Ora2Pg.Common.Config;
 using Ora2Pg.Common.Util;
 using Ora2PgSchemaComparer.Model;
+using Ora2PgSchemaComparer.Util;
 
 namespace Ora2PgSchemaComparer.Extractor;
 
@@ -44,6 +45,8 @@ public class PostgresSchemaExtractor
         };
 
         schema.Tables = ExtractTables(schemaName);
+        schema.Partitions = ExtractPartitionMetadata(schemaName);
+        AttachPartitionMetadata(schema);
         schema.Constraints = ExtractConstraints(schemaName);
         schema.Indexes = ExtractIndexes(schemaName);
         schema.Sequences = ExtractSequences(schemaName);
@@ -55,6 +58,99 @@ public class PostgresSchemaExtractor
             schema.TableCount, schema.Constraints.Count, schema.IndexCount);
 
         return schema;
+    }
+
+    private void AttachPartitionMetadata(SchemaDefinition schema)
+    {
+        if (!schema.Partitions.Any())
+        {
+            return;
+        }
+
+        var tableMap = schema.Tables.ToDictionary(t => t.TableName, StringComparer.OrdinalIgnoreCase);
+        foreach (var metadata in schema.Partitions)
+        {
+            if (!tableMap.TryGetValue(metadata.ParentTableName, out var table))
+            {
+                continue;
+            }
+
+            table.IsPartitioned = true;
+            table.PartitionStrategy = metadata.Strategy;
+            table.PartitionColumns = metadata.PartitionColumns.ToList();
+            table.Partitions = metadata.Partitions.ToList();
+        }
+    }
+
+    private List<PartitionMetadata> ExtractPartitionMetadata(string schemaName)
+    {
+        var partitions = new Dictionary<string, PartitionMetadata>(StringComparer.OrdinalIgnoreCase);
+
+        using var connection = _connectionManager.GetConnection(DatabaseType.PostgreSQL);
+        connection.Open();
+
+        var query = @"
+            SELECT parent.relname as parent_table,
+                   part.partstrat as strategy,
+                   pg_get_partkeydef(parent.oid) as partition_key,
+                   child.relname as partition_name,
+                   pg_get_expr(child.relpartbound, child.oid) as partition_bound
+            FROM pg_catalog.pg_partitioned_table part
+            JOIN pg_catalog.pg_class parent ON parent.oid = part.partrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = parent.relnamespace
+            LEFT JOIN pg_catalog.pg_inherits inh ON inh.inhparent = parent.oid
+            LEFT JOIN pg_catalog.pg_class child ON child.oid = inh.inhrelid
+            WHERE n.nspname = $1
+            ORDER BY parent.relname, child.relname";
+
+        using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
+        cmd.Parameters.AddWithValue(schemaName.ToLower());
+
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var parentTable = reader.GetString(0);
+            if (_objectFilter.IsTableExcluded(parentTable, schemaName))
+            {
+                continue;
+            }
+
+            var strategyCode = reader.IsDBNull(1) ? null : reader.GetString(1);
+            var strategy = PartitionParsing.ParsePostgresStrategy(strategyCode);
+            if (strategy == PartitionStrategy.None && string.Equals(strategyCode, "h", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.Information("Skipping HASH partition metadata for PostgreSQL table {SchemaName}.{TableName}", schemaName, parentTable);
+                continue;
+            }
+
+            if (!partitions.TryGetValue(parentTable, out var metadata))
+            {
+                var partitionKeyDefinition = reader.IsDBNull(2) ? null : reader.GetString(2);
+                metadata = new PartitionMetadata
+                {
+                    ParentTableName = parentTable,
+                    Strategy = strategy,
+                    PartitionColumns = PartitionParsing.ParsePartitionColumns(partitionKeyDefinition)
+                };
+                partitions[parentTable] = metadata;
+            }
+
+            if (!reader.IsDBNull(3))
+            {
+                var partitionName = reader.GetString(3);
+                if (!_objectFilter.IsTableExcluded(partitionName, schemaName))
+                {
+                    metadata.Partitions.Add(new PartitionDefinition
+                    {
+                        PartitionName = partitionName,
+                        BoundaryDefinition = reader.IsDBNull(4) ? null : reader.GetString(4)
+                    });
+                }
+            }
+        }
+
+        return partitions.Values.ToList();
     }
 
     private List<TableDefinition> ExtractTables(string schemaName)
