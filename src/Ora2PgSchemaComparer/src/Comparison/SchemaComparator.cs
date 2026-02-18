@@ -32,7 +32,17 @@ public class SchemaComparator
     private void CompareTables(ComparisonResult result)
     {
         var oracleTables = result.OracleSchema.Tables.ToDictionary(t => t.TableName.ToUpper());
-        var postgresTables = result.PostgresSchema.Tables.ToDictionary(t => t.TableName.ToUpper());
+        var postgresSummary = PartitionNormalization.BuildPostgresSummary(result.PostgresSchema);
+        var postgresTables = postgresSummary.LogicalTables;
+
+        result.OracleLogicalTableCount = oracleTables.Count;
+        result.OracleLogicalColumnCount = result.OracleSchema.ColumnCount;
+        result.PostgresLogicalTableCount = postgresSummary.LogicalTableCount;
+        result.PostgresLogicalColumnCount = postgresSummary.LogicalColumnCount;
+        result.PostgresPhysicalTableCount = postgresSummary.PhysicalTableCount;
+        result.PostgresPartitionedTableCount = postgresSummary.PartitionedTableCount;
+        result.PostgresPartitionCount = postgresSummary.PartitionCount;
+        result.PartitionDetails = postgresSummary.PartitionDetails;
 
         if (oracleTables.Count != postgresTables.Count)
         {
@@ -169,6 +179,15 @@ public class ComparisonResult
 {
     public SchemaDefinition OracleSchema { get; set; } = new();
     public SchemaDefinition PostgresSchema { get; set; } = new();
+
+    public int OracleLogicalTableCount { get; set; }
+    public int PostgresLogicalTableCount { get; set; }
+    public int PostgresPhysicalTableCount { get; set; }
+    public int OracleLogicalColumnCount { get; set; }
+    public int PostgresLogicalColumnCount { get; set; }
+    public int PostgresPartitionedTableCount { get; set; }
+    public int PostgresPartitionCount { get; set; }
+    public List<string> PartitionDetails { get; set; } = new();
     
     public List<string> TableIssues { get; set; } = new();
     public List<string> ConstraintIssues { get; set; } = new();

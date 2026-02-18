@@ -19,24 +19,27 @@ public class SchemaComparisonReportWriter
 
         report.AppendLine("SCHEMA SUMMARY");
         report.AppendLine("--------------------------------------------------------------------------------");
-        report.AppendLine($"  Tables:       Oracle={result.OracleSchema.TableCount,-3}  PostgreSQL={result.PostgresSchema.TableCount,-3}");
-        report.AppendLine($"  Columns:      Oracle={result.OracleSchema.ColumnCount,-3}  PostgreSQL={result.PostgresSchema.ColumnCount,-3}");
+        report.AppendLine($"  Tables:       Oracle={result.OracleLogicalTableCount,-3}  PostgreSQL={result.PostgresLogicalTableCount,-3}");
+        report.AppendLine($"  Columns:      Oracle={result.OracleLogicalColumnCount,-3}  PostgreSQL={result.PostgresLogicalColumnCount,-3}");
         report.AppendLine($"  Primary Keys: Oracle={result.OracleSchema.PrimaryKeyCount,-3}  PostgreSQL={result.PostgresSchema.PrimaryKeyCount,-3}");
         report.AppendLine($"  Foreign Keys: Oracle={result.OracleSchema.ForeignKeyCount,-3}  PostgreSQL={result.PostgresSchema.ForeignKeyCount,-3}");
         report.AppendLine();
 
         report.AppendLine("1. TABLES & STRUCTURE");
         report.AppendLine("--------------------------------------------------------------------------------");
-        report.AppendLine("   " + GetCheckmark(result.OracleSchema.TableCount == result.PostgresSchema.TableCount) + 
+        report.AppendLine("   " + GetCheckmark(result.OracleLogicalTableCount == result.PostgresLogicalTableCount) + 
             $" Table Count:");
-        report.AppendLine($"     Oracle:     {result.OracleSchema.TableCount} tables");
-        report.AppendLine($"     PostgreSQL: {result.PostgresSchema.TableCount} tables");
+        report.AppendLine($"     Oracle (Logical):     {result.OracleLogicalTableCount} tables");
+        report.AppendLine($"     PostgreSQL (Logical): {result.PostgresLogicalTableCount} tables");
+        report.AppendLine($"     PostgreSQL (Physical): {result.PostgresPhysicalTableCount} tables");
+        report.AppendLine($"     Partitioned Tables:  {result.PostgresPartitionedTableCount}");
+        report.AppendLine($"     Total Partitions:    {result.PostgresPartitionCount}");
         report.AppendLine();
         
-        report.AppendLine("   " + GetCheckmark(result.OracleSchema.ColumnCount == result.PostgresSchema.ColumnCount) +
+        report.AppendLine("   " + GetCheckmark(result.OracleLogicalColumnCount == result.PostgresLogicalColumnCount) +
             $" Column Count:");
-        report.AppendLine($"     Oracle:     {result.OracleSchema.ColumnCount} columns");
-        report.AppendLine($"     PostgreSQL: {result.PostgresSchema.ColumnCount} columns");
+        report.AppendLine($"     Oracle (Logical):     {result.OracleLogicalColumnCount} columns");
+        report.AppendLine($"     PostgreSQL (Logical): {result.PostgresLogicalColumnCount} columns");
         report.AppendLine();
         
         if (result.TableIssues.Any())
@@ -45,6 +48,16 @@ public class SchemaComparisonReportWriter
             foreach (var issue in result.TableIssues)
             {
                 report.AppendLine($"     {issue}");
+            }
+            report.AppendLine();
+        }
+
+        if (result.PartitionDetails.Any())
+        {
+            report.AppendLine("   Partition Details:");
+            foreach (var detail in result.PartitionDetails)
+            {
+                report.AppendLine($"     {detail}");
             }
             report.AppendLine();
         }
