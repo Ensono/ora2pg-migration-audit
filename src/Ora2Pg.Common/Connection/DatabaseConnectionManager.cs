@@ -97,10 +97,12 @@ public class DatabaseConnectionManager : IDisposable
             parameter.Value = schema;
             command.Parameters.Add(parameter);
             
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
+            using (var reader = command.ExecuteReader())
             {
-                tables.Add(reader.GetString(0));
+                while (reader.Read())
+                {
+                    tables.Add(reader.GetString(0));
+                }
             }
 
             if (dbType == DatabaseType.PostgreSQL)
