@@ -116,7 +116,12 @@ public class PostgresSchemaExtractor
                 continue;
             }
 
-            var strategyCode = reader.IsDBNull(1) ? null : reader.GetString(1);
+            string? strategyCode = null;
+            if (!reader.IsDBNull(1))
+            {
+                var strategyChar = reader.GetFieldValue<char>(1);
+                strategyCode = strategyChar.ToString();
+            }
             var strategy = PartitionParsing.ParsePostgresStrategy(strategyCode);
             if (strategy == PartitionStrategy.None && string.Equals(strategyCode, "h", StringComparison.OrdinalIgnoreCase))
             {
