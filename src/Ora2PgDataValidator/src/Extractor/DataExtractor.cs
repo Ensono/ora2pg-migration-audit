@@ -74,39 +74,41 @@ public class DataExtractor
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = $"SELECT * FROM {tableReference} WHERE 1=0"; // Get schema only, no data
 
-        using var reader = cmd.ExecuteReader(CommandBehavior.SchemaOnly);
-        var schemaTable = reader.GetSchemaTable();
-
-        if (schemaTable != null)
+        using (var reader = cmd.ExecuteReader(CommandBehavior.SchemaOnly))
         {
-            int position = 1;
-            int skippedCount = 0;
-            foreach (DataRow row in schemaTable.Rows)
-            {
-                string columnName = row["ColumnName"].ToString() ?? "";
-                string columnType = row["DataType"].ToString() ?? "";
-                bool isKey = row["IsKey"] != DBNull.Value && (bool)row["IsKey"];
+            var schemaTable = reader.GetSchemaTable();
 
-                if (_columnsToSkip.Contains(columnName))
+            if (schemaTable != null)
+            {
+                int position = 1;
+                int skippedCount = 0;
+                foreach (DataRow row in schemaTable.Rows)
                 {
-                    skippedCount++;
-                    Log.Debug("Skipping column: {ColumnName} in table {TableReference}", columnName, tableReference);
-                    continue;
+                    string columnName = row["ColumnName"].ToString() ?? "";
+                    string columnType = row["DataType"].ToString() ?? "";
+                    bool isKey = row["IsKey"] != DBNull.Value && (bool)row["IsKey"];
+
+                    if (_columnsToSkip.Contains(columnName))
+                    {
+                        skippedCount++;
+                        Log.Debug("Skipping column: {ColumnName} in table {TableReference}", columnName, tableReference);
+                        continue;
+                    }
+
+                    columns.Add(new TableMetadata.ColumnMetadata(columnName, columnType, position));
+
+                    if (isKey)
+                    {
+                        primaryKeyColumns.Add(columnName);
+                    }
+
+                    position++;
                 }
 
-                columns.Add(new TableMetadata.ColumnMetadata(columnName, columnType, position));
-
-                if (isKey)
+                if (skippedCount > 0)
                 {
-                    primaryKeyColumns.Add(columnName);
+                    Log.Information("Skipped {Count} column(s) in table {TableReference}", skippedCount, tableReference);
                 }
-
-                position++;
-            }
-
-            if (skippedCount > 0)
-            {
-                Log.Information("Skipped {Count} column(s) in table {TableReference}", skippedCount, tableReference);
             }
         }
 
