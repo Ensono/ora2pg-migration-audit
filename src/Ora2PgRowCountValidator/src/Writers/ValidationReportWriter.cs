@@ -131,6 +131,19 @@ public class ValidationReportWriter
                 sb.AppendLine();
             }
 
+            if (issue.PartitionRowCounts.Any())
+            {
+                sb.AppendLine("**Partition Breakdown:**");
+                sb.AppendLine();
+                sb.AppendLine("| Partition | Rows |");
+                sb.AppendLine("|-----------|------|");
+                foreach (var partition in issue.PartitionRowCounts.OrderBy(p => p.PartitionName))
+                {
+                    sb.AppendLine($"| {partition.PartitionName} | {partition.RowCount:N0} |");
+                }
+                sb.AppendLine();
+            }
+
             if (issue.HasDetailedComparison)
             {
                 if (issue.MissingInPostgres.Any())
@@ -201,6 +214,16 @@ public class ValidationReportWriter
             {
                 sb.AppendLine($"Recommendation:");
                 sb.AppendLine($"  {issue.Recommendation}");
+                sb.AppendLine();
+            }
+
+            if (issue.PartitionRowCounts.Any())
+            {
+                sb.AppendLine("Partition Breakdown:");
+                foreach (var partition in issue.PartitionRowCounts.OrderBy(p => p.PartitionName))
+                {
+                    sb.AppendLine($"  - {partition.PartitionName}: {partition.RowCount:N0}");
+                }
                 sb.AppendLine();
             }
 
