@@ -110,6 +110,13 @@ public class DataExtractor
             }
         }
 
+        var primaryKeyFromDb = GetPrimaryKeyColumns(schema, tableName);
+        if (primaryKeyFromDb.Count > 0)
+        {
+            var columnNameSet = columns.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            primaryKeyColumns = primaryKeyFromDb.Where(columnNameSet.Contains).ToList();
+        }
+
         if (primaryKeyColumns.Count == 0 && columns.Count > 0)
         {
             primaryKeyColumns.AddRange(columns.Select(c => c.Name));
@@ -124,6 +131,78 @@ public class DataExtractor
         }
 
         return new TableMetadata(tableReference, columns, primaryKeyColumns);
+    }
+
+
+    private List<string> GetPrimaryKeyColumns(string? schema, string tableName)
+    {
+        if (string.IsNullOrWhiteSpace(schema))
+        {
+            return new List<string>();
+        }
+
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandTimeout = _commandTimeoutSeconds;
+
+        if (_databaseType == DatabaseType.Oracle)
+        {
+            cmd.CommandText = @"
+                SELECT cols.column_name
+                FROM all_constraints cons
+                JOIN all_cons_columns cols
+                  ON cons.owner = cols.owner
+                 AND cons.constraint_name = cols.constraint_name
+                WHERE cons.owner = :schema
+                  AND cons.table_name = :table
+                  AND cons.constraint_type = 'P'
+                ORDER BY cols.position";
+
+            var schemaParam = cmd.CreateParameter();
+            schemaParam.ParameterName = "schema";
+            schemaParam.Value = schema.ToUpper();
+            cmd.Parameters.Add(schemaParam);
+
+            var tableParam = cmd.CreateParameter();
+            tableParam.ParameterName = "table";
+            tableParam.Value = tableName.ToUpper();
+            cmd.Parameters.Add(tableParam);
+        }
+        else if (_databaseType == DatabaseType.PostgreSQL)
+        {
+            cmd.CommandText = @"
+                SELECT a.attname AS column_name
+                FROM pg_index i
+                JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                JOIN pg_class c ON c.oid = i.indrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE i.indisprimary
+                  AND n.nspname = @schema
+                  AND c.relname = @table
+                ORDER BY array_position(i.indkey, a.attnum)";
+
+            var schemaParam = cmd.CreateParameter();
+            schemaParam.ParameterName = "@schema";
+            schemaParam.Value = schema.ToLower();
+            cmd.Parameters.Add(schemaParam);
+
+            var tableParam = cmd.CreateParameter();
+            tableParam.ParameterName = "@table";
+            tableParam.Value = tableName.ToLower();
+            cmd.Parameters.Add(tableParam);
+        }
+        else
+        {
+            return new List<string>();
+        }
+
+        var primaryKeys = new List<string>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            primaryKeys.Add(reader.GetString(0));
+        }
+
+        return primaryKeys;
     }
 
 
