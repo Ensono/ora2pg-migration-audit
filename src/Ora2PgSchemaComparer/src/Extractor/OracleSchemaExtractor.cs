@@ -147,13 +147,12 @@ public class OracleSchemaExtractor
             return partitions.Values.ToList();
         }
 
-        var partitionQuery = @"
-            SELECT table_name,
-                   partition_name,
-                   TO_LOB(high_value) as high_value
-            FROM all_tab_partitions
-            WHERE table_owner = :schema
-            ORDER BY table_name, partition_position";
+         var partitionQuery = @"
+             SELECT table_name,
+                 partition_name
+             FROM all_tab_partitions
+             WHERE table_owner = :schema
+             ORDER BY table_name, partition_position";
 
         using (var cmd = new OracleCommand(partitionQuery, (OracleConnection)connection))
         {
@@ -172,7 +171,7 @@ public class OracleSchemaExtractor
                 metadata.Partitions.Add(new PartitionDefinition
                 {
                     PartitionName = partitionName,
-                    BoundaryDefinition = reader.IsDBNull(2) ? null : reader.GetString(2)
+                    BoundaryDefinition = null
                 });
             }
         }
