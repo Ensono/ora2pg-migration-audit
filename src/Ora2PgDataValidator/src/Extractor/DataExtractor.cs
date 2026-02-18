@@ -151,19 +151,19 @@ public class DataExtractor
                 FROM all_constraints cons
                 JOIN all_cons_columns cols
                   ON cons.owner = cols.owner
-                 AND cons.constraint_name = cols.constraint_name
-                WHERE cons.owner = :schema
-                  AND cons.table_name = :table
+                  AND cons.constraint_name = cols.constraint_name
+                WHERE cons.owner = :schema_name
+                  AND cons.table_name = :table_name
                   AND cons.constraint_type = 'P'
                 ORDER BY cols.position";
 
             var schemaParam = cmd.CreateParameter();
-            schemaParam.ParameterName = "schema";
+            schemaParam.ParameterName = "schema_name";
             schemaParam.Value = schema.ToUpper();
             cmd.Parameters.Add(schemaParam);
 
             var tableParam = cmd.CreateParameter();
-            tableParam.ParameterName = "table";
+            tableParam.ParameterName = "table_name";
             tableParam.Value = tableName.ToUpper();
             cmd.Parameters.Add(tableParam);
         }
