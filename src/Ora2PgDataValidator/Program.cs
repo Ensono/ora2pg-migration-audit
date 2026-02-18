@@ -122,6 +122,16 @@ class Program
             Log.Information("Discovered {Count} tables in schema {Schema}", tables.Count, schemaName);
         }
 
+        var tableFilter = ObjectFilter.FromProperties(props);
+        var filteredTables = tableFilter.FilterTables(tables);
+        var excludedCount = tables.Count - filteredTables.Count;
+        if (excludedCount > 0)
+        {
+            Log.Information("Excluded {Count} table(s) based on table exclusion patterns or ignored objects", excludedCount);
+        }
+
+        tables = filteredTables;
+
         Log.Information("");
         Log.Information("5. Connection Pool Status:");
         Log.Information("   {Stats}", connectionManager.GetPoolStats(targetDatabase));
@@ -214,6 +224,27 @@ class Program
 
             tableMapping = CaseConverter.ParseAndNormalizeMapping(tablesConfig);
             Log.Information("Parsed {Count} table mappings", tableMapping.Count);
+
+            var tableFilter = ObjectFilter.FromProperties(props);
+            var filteredMapping = new Dictionary<string, string>();
+            int excludedMappings = 0;
+            foreach (var entry in tableMapping)
+            {
+                if (tableFilter.IsTableExcluded(entry.Key) || tableFilter.IsTableExcluded(entry.Value))
+                {
+                    excludedMappings++;
+                    continue;
+                }
+
+                filteredMapping[entry.Key] = entry.Value;
+            }
+
+            if (excludedMappings > 0)
+            {
+                Log.Information("Excluded {Count} table mapping(s) based on table exclusion patterns or ignored objects", excludedMappings);
+            }
+
+            tableMapping = filteredMapping;
         }
 
         Log.Information("");

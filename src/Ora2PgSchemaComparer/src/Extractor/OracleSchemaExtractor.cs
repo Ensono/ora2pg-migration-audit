@@ -3,6 +3,7 @@ using Oracle.ManagedDataAccess.Client;
 using Serilog;
 using Ora2Pg.Common.Connection;
 using Ora2Pg.Common.Config;
+using Ora2Pg.Common.Util;
 using Ora2PgSchemaComparer.Model;
 
 namespace Ora2PgSchemaComparer.Extractor;
@@ -13,12 +14,14 @@ public class OracleSchemaExtractor
     private readonly ILogger _logger = Log.ForContext<OracleSchemaExtractor>();
     private readonly DatabaseConnectionManager _connectionManager;
     private readonly HashSet<string> _columnsToSkip;
+    private readonly ObjectFilter _objectFilter;
 
     public OracleSchemaExtractor(DatabaseConnectionManager connectionManager)
     {
         _connectionManager = connectionManager;
 
         var skipColumnsEnv = ApplicationProperties.Instance.Get("ORACLE_SKIP_COLUMNS", string.Empty);
+        _objectFilter = ObjectFilter.FromProperties();
         _columnsToSkip = new HashSet<string>(
             skipColumnsEnv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             StringComparer.OrdinalIgnoreCase
@@ -73,10 +76,16 @@ public class OracleSchemaExtractor
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            var tableName = reader.GetString(0);
+            if (_objectFilter.IsTableExcluded(tableName, schemaName))
+            {
+                continue;
+            }
+
             var table = new TableDefinition
             {
                 SchemaName = schemaName.ToUpper(),
-                TableName = reader.GetString(0),
+                TableName = tableName,
                 IsPartitioned = reader.GetString(1) == "YES",
                 TableComment = reader.IsDBNull(2) ? null : reader.GetString(2)
             };
@@ -177,11 +186,17 @@ public class OracleSchemaExtractor
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            var tableName = reader.GetString(1);
+            if (_objectFilter.IsTableExcluded(tableName, schemaName))
+            {
+                continue;
+            }
+
             pks.Add(new ConstraintDefinition
             {
                 ConstraintName = reader.GetString(0),
                 SchemaName = schemaName.ToUpper(),
-                TableName = reader.GetString(1),
+                TableName = tableName,
                 Type = ConstraintType.PrimaryKey,
                 Columns = reader.GetString(2).Split(',').ToList()
             });
@@ -215,14 +230,22 @@ public class OracleSchemaExtractor
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            var tableName = reader.GetString(1);
+            var referencedTable = reader.GetString(3);
+            if (_objectFilter.IsTableExcluded(tableName, schemaName) ||
+                _objectFilter.IsTableExcluded(referencedTable, reader.GetString(2)))
+            {
+                continue;
+            }
+
             fks.Add(new ConstraintDefinition
             {
                 ConstraintName = reader.GetString(0),
                 SchemaName = schemaName.ToUpper(),
-                TableName = reader.GetString(1),
+                TableName = tableName,
                 Type = ConstraintType.ForeignKey,
                 ReferencedSchemaName = reader.GetString(2),
-                ReferencedTableName = reader.GetString(3),
+                ReferencedTableName = referencedTable,
                 OnDeleteRule = reader.GetString(4),
                 OnUpdateRule = "NO ACTION", // Oracle doesn't have ON UPDATE
                 IsDeferrable = reader.GetString(5) == "DEFERRABLE",
@@ -256,11 +279,17 @@ public class OracleSchemaExtractor
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            var tableName = reader.GetString(1);
+            if (_objectFilter.IsTableExcluded(tableName, schemaName))
+            {
+                continue;
+            }
+
             uniques.Add(new ConstraintDefinition
             {
                 ConstraintName = reader.GetString(0),
                 SchemaName = schemaName.ToUpper(),
-                TableName = reader.GetString(1),
+                TableName = tableName,
                 Type = ConstraintType.Unique,
                 Columns = reader.GetString(2).Split(',').ToList()
             });
@@ -289,6 +318,12 @@ public class OracleSchemaExtractor
         while (reader.Read())
         {
             var condition = reader.IsDBNull(2) ? null : reader.GetString(2);
+            var tableName = reader.GetString(1);
+
+            if (_objectFilter.IsTableExcluded(tableName, schemaName))
+            {
+                continue;
+            }
 
             if (condition != null && condition.Contains("IS NOT NULL"))
                 continue;
@@ -297,7 +332,7 @@ public class OracleSchemaExtractor
             {
                 ConstraintName = reader.GetString(0),
                 SchemaName = schemaName.ToUpper(),
-                TableName = reader.GetString(1),
+                TableName = tableName,
                 Type = ConstraintType.Check,
                 CheckCondition = condition
             });
@@ -328,15 +363,23 @@ public class OracleSchemaExtractor
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            var indexName = reader.GetString(0);
+            var tableName = reader.GetString(1);
+            if (_objectFilter.IsTableExcluded(tableName, schemaName) ||
+                _objectFilter.IsObjectIgnored("index", indexName, schemaName))
+            {
+                continue;
+            }
+
             var indexType = reader.GetString(2);
             var index = new IndexDefinition
             {
-                IndexName = reader.GetString(0),
+                IndexName = indexName,
                 SchemaName = schemaName.ToUpper(),
-                TableName = reader.GetString(1),
+                TableName = tableName,
                 Type = indexType == "BITMAP" ? IndexType.Bitmap : IndexType.BTree,
                 IsUnique = reader.GetString(3) == "UNIQUE",
-                Columns = ExtractIndexColumns(schemaName, reader.GetString(0))
+                Columns = ExtractIndexColumns(schemaName, indexName)
             };
             
             indexes.Add(index);
@@ -393,9 +436,15 @@ public class OracleSchemaExtractor
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            var sequenceName = reader.GetString(0);
+            if (_objectFilter.IsObjectIgnored("sequence", sequenceName, schemaName))
+            {
+                continue;
+            }
+
             sequences.Add(new SequenceDefinition
             {
-                SequenceName = reader.GetString(0),
+                SequenceName = sequenceName,
                 SchemaName = schemaName.ToUpper(),
                 CurrentValue = reader.IsDBNull(1) ? null : reader.GetDecimal(1),
                 IncrementBy = reader.IsDBNull(2) ? null : reader.GetInt64(2),
@@ -423,9 +472,15 @@ public class OracleSchemaExtractor
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
+                var viewName = reader.GetString(0);
+                if (_objectFilter.IsObjectIgnored("view", viewName, schemaName))
+                {
+                    continue;
+                }
+
                 views.Add(new ViewDefinition
                 {
-                    ViewName = reader.GetString(0),
+                    ViewName = viewName,
                     SchemaName = schemaName.ToUpper(),
                     IsMaterialized = false
                 });
@@ -442,9 +497,15 @@ public class OracleSchemaExtractor
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
+                var viewName = reader.GetString(0);
+                if (_objectFilter.IsObjectIgnored("materialized_view", viewName, schemaName))
+                {
+                    continue;
+                }
+
                 views.Add(new ViewDefinition
                 {
-                    ViewName = reader.GetString(0),
+                    ViewName = viewName,
                     SchemaName = schemaName.ToUpper(),
                     IsMaterialized = true,
                     RefreshMethod = reader.IsDBNull(1) ? null : reader.GetString(1)
@@ -473,11 +534,19 @@ public class OracleSchemaExtractor
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            var triggerName = reader.GetString(0);
+            var tableName = reader.GetString(1);
+            if (_objectFilter.IsTableExcluded(tableName, schemaName) ||
+                _objectFilter.IsObjectIgnored("trigger", triggerName, schemaName))
+            {
+                continue;
+            }
+
             triggers.Add(new TriggerDefinition
             {
-                TriggerName = reader.GetString(0),
+                TriggerName = triggerName,
                 SchemaName = schemaName.ToUpper(),
-                TableName = reader.GetString(1),
+                TableName = tableName,
                 TriggerEvent = reader.GetString(2),
                 TriggerTiming = reader.GetString(3),
                 IsEnabled = reader.GetString(4) == "ENABLED"
@@ -506,9 +575,19 @@ public class OracleSchemaExtractor
         while (reader.Read())
         {
             var objType = reader.GetString(1);
+            var procedureName = reader.GetString(0);
+            var typeKey = objType == "FUNCTION" ? "function" :
+                          objType == "PACKAGE" ? "package" :
+                          "procedure";
+
+            if (_objectFilter.IsObjectIgnored(typeKey, procedureName, schemaName))
+            {
+                continue;
+            }
+
             procedures.Add(new ProcedureDefinition
             {
-                ProcedureName = reader.GetString(0),
+                ProcedureName = procedureName,
                 SchemaName = schemaName.ToUpper(),
                 Type = objType == "FUNCTION" ? ProcedureType.Function : 
                        objType == "PACKAGE" ? ProcedureType.Package : 

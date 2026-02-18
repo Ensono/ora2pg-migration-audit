@@ -3,6 +3,7 @@ using Oracle.ManagedDataAccess.Client;
 using Npgsql;
 using Serilog;
 using Ora2Pg.Common.Config;
+using Ora2Pg.Common.Util;
 
 namespace Ora2Pg.Common.Connection;
 
@@ -106,8 +107,17 @@ public class DatabaseConnectionManager : IDisposable
         {
             _logger.Error(ex, "Error getting tables in schema {Schema} for {DbType}", schema, dbType);
         }
-        
-        return tables;
+
+        var objectFilter = ObjectFilter.FromProperties();
+        var filteredTables = objectFilter.FilterTables(tables, schema);
+        var excludedCount = tables.Count - filteredTables.Count;
+        if (excludedCount > 0)
+        {
+            _logger.Information("Filtered {ExcludedCount} table(s) from {DbType} schema {Schema}",
+                excludedCount, dbType, schema);
+        }
+
+        return filteredTables;
     }
 
 
