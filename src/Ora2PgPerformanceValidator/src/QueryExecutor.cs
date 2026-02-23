@@ -3,6 +3,7 @@ using Oracle.ManagedDataAccess.Client;
 using Npgsql;
 using Serilog;
 using Ora2PgPerformanceValidator.Models;
+using Ora2Pg.Common.Util;
 
 namespace Ora2PgPerformanceValidator.Executors;
 
@@ -16,16 +17,25 @@ public class QueryExecutor
     private readonly int _warmupRuns;
     private readonly int _measurementRuns;
     private readonly int _thresholdPercent;
+    private readonly ObjectFilter _objectFilter;
+    private readonly string _oracleSchema;
+    private readonly string _postgresSchema;
 
     public QueryExecutor(
         string oracleConnectionString, 
         string postgresConnectionString,
+        ObjectFilter objectFilter,
+        string oracleSchema,
+        string postgresSchema,
         int warmupRuns = 1,
         int measurementRuns = 3,
         int thresholdPercent = 50)
     {
         _oracleConnectionString = oracleConnectionString;
         _postgresConnectionString = postgresConnectionString;
+        _objectFilter = objectFilter;
+        _oracleSchema = oracleSchema;
+        _postgresSchema = postgresSchema;
         _warmupRuns = warmupRuns;
         _measurementRuns = measurementRuns;
         _thresholdPercent = thresholdPercent;
@@ -93,6 +103,8 @@ public class QueryExecutor
 
         var times = new List<double>();
         long rowCount = 0;
+        int? tableNameColumnIndex = null;
+        bool checkedForTableColumn = false;
 
         for (int i = 0; i < _measurementRuns; i++)
         {
@@ -103,19 +115,71 @@ public class QueryExecutor
             
             await using var reader = await cmd.ExecuteReaderAsync();
             long currentRowCount = 0;
-            while (await reader.ReadAsync())
+            
+            // Detect table_name column on first measurement run
+            if (!checkedForTableColumn)
             {
-                currentRowCount++;
+                for (int col = 0; col < reader.FieldCount; col++)
+                {
+                    if (reader.GetName(col).Equals("TABLE_NAME", StringComparison.OrdinalIgnoreCase))
+                    {
+                        tableNameColumnIndex = col;
+                        _logger.Debug("Detected TABLE_NAME column at index {Index} - applying ObjectFilter", col);
+                        break;
+                    }
+                }
+                checkedForTableColumn = true;
             }
             
-            sw.Stop();
-            times.Add(sw.Elapsed.TotalMilliseconds);
-            rowCount = currentRowCount; // Use last run's row count
-        }
+            while (await reader.ReadAsync())
+            {
+                // If query returns table names, filter using ObjectFilter
+                if (tableNameColumnIndex.HasValue)
+                {
+                    var tableName = reader.GetString(tableNameColumnIndex.Value);
+                    if (_objectFilter.IsTableExcluded(tableName, _oracleSchema))
+                    {
+                        continue; // Skip excluded table
+                    }
+        int? tableNameColumnIndex = null;
+        bool checkedForTableColumn = false;
 
-        return (GetMedian(times), rowCount);
-    }
+        for (int i = 0; i < _measurementRuns; i++)
+        {
+            await using var cmd = new NpgsqlCommand(query, conn);
+            cmd.CommandTimeout = DefaultCommandTimeoutSeconds;
 
+            var sw = Stopwatch.StartNew();
+            
+            await using var reader = await cmd.ExecuteReaderAsync();
+            long currentRowCount = 0;
+            
+            // Detect table_name column on first measurement run
+            if (!checkedForTableColumn)
+            {
+                for (int col = 0; col < reader.FieldCount; col++)
+                {
+                    if (reader.GetName(col).Equals("table_name", StringComparison.OrdinalIgnoreCase))
+                    {
+                        tableNameColumnIndex = col;
+                        _logger.Debug("Detected table_name column at index {Index} - applying ObjectFilter", col);
+                        break;
+                    }
+                }
+                checkedForTableColumn = true;
+            }
+            
+            while (await reader.ReadAsync())
+            {
+                // If query returns table names, filter using ObjectFilter
+                if (tableNameColumnIndex.HasValue)
+                {
+                    var tableName = reader.GetString(tableNameColumnIndex.Value);
+                    if (_objectFilter.IsTableExcluded(tableName, _postgresSchema))
+                    {
+                        continue; // Skip excluded table
+                    }
+                }
     private async Task<(double executionTimeMs, long rowCount)> ExecutePostgresQueryAsync(string query)
     {
         await using var conn = new NpgsqlConnection(_postgresConnectionString);
