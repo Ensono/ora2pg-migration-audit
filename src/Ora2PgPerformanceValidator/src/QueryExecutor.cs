@@ -141,6 +141,33 @@ public class QueryExecutor
                     {
                         continue; // Skip excluded table
                     }
+                }
+                currentRowCount++;
+            }
+            
+            sw.Stop();
+            times.Add(sw.Elapsed.TotalMilliseconds);
+            rowCount = currentRowCount; // Use last run's row count
+        }
+
+        return (GetMedian(times), rowCount);
+    }
+
+    private async Task<(double executionTimeMs, long rowCount)> ExecutePostgresQueryAsync(string query)
+    {
+        await using var conn = new NpgsqlConnection(_postgresConnectionString);
+        await conn.OpenAsync();
+        
+        for (int i = 0; i < _warmupRuns; i++)
+        {
+            await using var warmupCmd = new NpgsqlCommand(query, conn);
+            warmupCmd.CommandTimeout = DefaultCommandTimeoutSeconds;
+            await using var warmupReader = await warmupCmd.ExecuteReaderAsync();
+            while (await warmupReader.ReadAsync()) { }
+        }
+
+        var times = new List<double>();
+        long rowCount = 0;
         int? tableNameColumnIndex = null;
         bool checkedForTableColumn = false;
 
@@ -180,33 +207,6 @@ public class QueryExecutor
                         continue; // Skip excluded table
                     }
                 }
-    private async Task<(double executionTimeMs, long rowCount)> ExecutePostgresQueryAsync(string query)
-    {
-        await using var conn = new NpgsqlConnection(_postgresConnectionString);
-        await conn.OpenAsync();
-        
-        for (int i = 0; i < _warmupRuns; i++)
-        {
-            await using var warmupCmd = new NpgsqlCommand(query, conn);
-            warmupCmd.CommandTimeout = DefaultCommandTimeoutSeconds;
-            await using var warmupReader = await warmupCmd.ExecuteReaderAsync();
-            while (await warmupReader.ReadAsync()) { }
-        }
-
-        var times = new List<double>();
-        long rowCount = 0;
-
-        for (int i = 0; i < _measurementRuns; i++)
-        {
-            await using var cmd = new NpgsqlCommand(query, conn);
-            cmd.CommandTimeout = DefaultCommandTimeoutSeconds;
-
-            var sw = Stopwatch.StartNew();
-            
-            await using var reader = await cmd.ExecuteReaderAsync();
-            long currentRowCount = 0;
-            while (await reader.ReadAsync())
-            {
                 currentRowCount++;
             }
             
