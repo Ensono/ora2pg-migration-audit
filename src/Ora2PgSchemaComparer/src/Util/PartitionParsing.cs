@@ -15,6 +15,7 @@ public static class PartitionParsing
         {
             "r" => PartitionStrategy.Range,
             "l" => PartitionStrategy.List,
+            "h" => PartitionStrategy.Hash,
             _ => PartitionStrategy.None
         };
     }
@@ -30,6 +31,7 @@ public static class PartitionParsing
         {
             "RANGE" => PartitionStrategy.Range,
             "LIST" => PartitionStrategy.List,
+            "HASH" => PartitionStrategy.Hash,
             _ => PartitionStrategy.None
         };
     }

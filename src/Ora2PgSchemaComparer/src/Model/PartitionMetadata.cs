@@ -4,7 +4,8 @@ public enum PartitionStrategy
 {
     None,
     Range,
-    List
+    List,
+    Hash
 }
 
 public class PartitionMetadata

@@ -65,13 +65,13 @@ public class SchemaComparisonHtmlWriter : BaseHtmlReportWriter
         sb.AppendLine("                <th style=\"text-align: right;\">Difference</th>");
         sb.AppendLine("            </tr>");
         
-        AddComparisonRow(sb, "Tables", result.OracleSchema.TableCount, result.PostgresSchema.TableCount);
-        AddComparisonRow(sb, "Columns", result.OracleSchema.ColumnCount, result.PostgresSchema.ColumnCount);
-        AddComparisonRow(sb, "Primary Keys", result.OracleSchema.PrimaryKeyCount, result.PostgresSchema.PrimaryKeyCount);
-        AddComparisonRow(sb, "Foreign Keys", result.OracleSchema.ForeignKeyCount, result.PostgresSchema.ForeignKeyCount);
-        AddComparisonRow(sb, "Unique Constraints", result.OracleSchema.UniqueConstraintCount, result.PostgresSchema.UniqueConstraintCount);
-        AddComparisonRow(sb, "Check Constraints", result.OracleSchema.CheckConstraintCount, result.PostgresSchema.CheckConstraintCount);
-        AddComparisonRow(sb, "Indexes", result.OracleSchema.IndexCount, result.PostgresSchema.IndexCount);
+        AddComparisonRow(sb, "Tables", result.OracleLogicalTableCount, result.PostgresLogicalTableCount);
+        AddComparisonRow(sb, "Columns", result.OracleLogicalColumnCount, result.PostgresLogicalColumnCount);
+        AddComparisonRow(sb, "Primary Keys", result.OracleLogicalPrimaryKeyCount, result.PostgresLogicalPrimaryKeyCount);
+        AddComparisonRow(sb, "Foreign Keys", result.OracleLogicalForeignKeyCount, result.PostgresLogicalForeignKeyCount);
+        AddComparisonRow(sb, "Unique Constraints", result.OracleLogicalUniqueConstraintCount, result.PostgresLogicalUniqueConstraintCount);
+        AddComparisonRow(sb, "Check Constraints", result.OracleLogicalCheckConstraintCount, result.PostgresLogicalCheckConstraintCount);
+        AddComparisonRow(sb, "Indexes", result.OracleLogicalIndexCount, result.PostgresLogicalIndexCount);
         
         sb.AppendLine("        </table>");
 

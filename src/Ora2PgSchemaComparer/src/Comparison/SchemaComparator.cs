@@ -19,9 +19,11 @@ public class SchemaComparator
             PostgresSchema = postgresSchema
         };
 
-        CompareTables(result);
-        CompareConstraints(result);
-        CompareIndexes(result);
+        var postgresSummary = PartitionNormalization.BuildPostgresSummary(result.PostgresSchema);
+
+        CompareTables(result, postgresSummary);
+        CompareConstraints(result, postgresSummary.LogicalTables.Keys);
+        CompareIndexes(result, postgresSummary.LogicalTables.Keys);
         CompareCodeObjects(result);
         
         _logger.Information("✓ Schema comparison complete: {TotalIssues} issues found", result.TotalIssues);
@@ -29,10 +31,9 @@ public class SchemaComparator
         return result;
     }
     
-    private void CompareTables(ComparisonResult result)
+    private void CompareTables(ComparisonResult result, LogicalSchemaSummary postgresSummary)
     {
         var oracleTables = result.OracleSchema.Tables.ToDictionary(t => t.TableName.ToUpper());
-        var postgresSummary = PartitionNormalization.BuildPostgresSummary(result.PostgresSchema);
         var postgresTables = postgresSummary.LogicalTables;
 
         result.OracleLogicalTableCount = oracleTables.Count;
@@ -86,10 +87,18 @@ public class SchemaComparator
         }
     }
     
-    private void CompareConstraints(ComparisonResult result)
+    private void CompareConstraints(ComparisonResult result, IEnumerable<string> postgresLogicalTableNames)
     {
+        var logicalTableSet = new HashSet<string>(postgresLogicalTableNames, StringComparer.OrdinalIgnoreCase);
+
         var oraclePKs = result.OracleSchema.Constraints.Where(c => c.Type == ConstraintType.PrimaryKey).ToList();
-        var postgresPKs = result.PostgresSchema.Constraints.Where(c => c.Type == ConstraintType.PrimaryKey).ToList();
+        var postgresPKs = result.PostgresSchema.Constraints
+            .Where(c => c.Type == ConstraintType.PrimaryKey)
+            .Where(c => logicalTableSet.Contains(c.TableName.ToUpperInvariant()))
+            .ToList();
+
+        result.OracleLogicalPrimaryKeyCount = oraclePKs.Count;
+        result.PostgresLogicalPrimaryKeyCount = postgresPKs.Count;
         
         if (oraclePKs.Count != postgresPKs.Count)
         {
@@ -97,7 +106,13 @@ public class SchemaComparator
         }
 
         var oracleFKs = result.OracleSchema.Constraints.Where(c => c.Type == ConstraintType.ForeignKey).ToList();
-        var postgresFKs = result.PostgresSchema.Constraints.Where(c => c.Type == ConstraintType.ForeignKey).ToList();
+        var postgresFKs = result.PostgresSchema.Constraints
+            .Where(c => c.Type == ConstraintType.ForeignKey)
+            .Where(c => logicalTableSet.Contains(c.TableName.ToUpperInvariant()))
+            .ToList();
+
+        result.OracleLogicalForeignKeyCount = oracleFKs.Count;
+        result.PostgresLogicalForeignKeyCount = postgresFKs.Count;
         
         if (oracleFKs.Count != postgresFKs.Count)
         {
@@ -118,18 +133,40 @@ public class SchemaComparator
         }
 
         var oracleUniques = result.OracleSchema.Constraints.Where(c => c.Type == ConstraintType.Unique).ToList();
-        var postgresUniques = result.PostgresSchema.Constraints.Where(c => c.Type == ConstraintType.Unique).ToList();
+        var postgresUniques = result.PostgresSchema.Constraints
+            .Where(c => c.Type == ConstraintType.Unique)
+            .Where(c => logicalTableSet.Contains(c.TableName.ToUpperInvariant()))
+            .ToList();
+
+        result.OracleLogicalUniqueConstraintCount = oracleUniques.Count;
+        result.PostgresLogicalUniqueConstraintCount = postgresUniques.Count;
         
         if (oracleUniques.Count != postgresUniques.Count)
         {
             result.ConstraintIssues.Add($"Unique constraint count mismatch: Oracle={oracleUniques.Count}, PostgreSQL={postgresUniques.Count}");
         }
+
+        var oracleChecks = result.OracleSchema.Constraints.Where(c => c.Type == ConstraintType.Check).ToList();
+        var postgresChecks = result.PostgresSchema.Constraints
+            .Where(c => c.Type == ConstraintType.Check)
+            .Where(c => logicalTableSet.Contains(c.TableName.ToUpperInvariant()))
+            .ToList();
+
+        result.OracleLogicalCheckConstraintCount = oracleChecks.Count;
+        result.PostgresLogicalCheckConstraintCount = postgresChecks.Count;
     }
     
-    private void CompareIndexes(ComparisonResult result)
+    private void CompareIndexes(ComparisonResult result, IEnumerable<string> postgresLogicalTableNames)
     {
+        var logicalTableSet = new HashSet<string>(postgresLogicalTableNames, StringComparer.OrdinalIgnoreCase);
+
         var oracleIndexes = result.OracleSchema.Indexes.ToList();
-        var postgresIndexes = result.PostgresSchema.Indexes.ToList();
+        var postgresIndexes = result.PostgresSchema.Indexes
+            .Where(i => logicalTableSet.Contains(i.TableName.ToUpperInvariant()))
+            .ToList();
+
+        result.OracleLogicalIndexCount = oracleIndexes.Count;
+        result.PostgresLogicalIndexCount = postgresIndexes.Count;
         
         if (oracleIndexes.Count != postgresIndexes.Count)
         {
@@ -185,6 +222,16 @@ public class ComparisonResult
     public int PostgresPhysicalTableCount { get; set; }
     public int OracleLogicalColumnCount { get; set; }
     public int PostgresLogicalColumnCount { get; set; }
+    public int OracleLogicalPrimaryKeyCount { get; set; }
+    public int PostgresLogicalPrimaryKeyCount { get; set; }
+    public int OracleLogicalForeignKeyCount { get; set; }
+    public int PostgresLogicalForeignKeyCount { get; set; }
+    public int OracleLogicalUniqueConstraintCount { get; set; }
+    public int PostgresLogicalUniqueConstraintCount { get; set; }
+    public int OracleLogicalCheckConstraintCount { get; set; }
+    public int PostgresLogicalCheckConstraintCount { get; set; }
+    public int OracleLogicalIndexCount { get; set; }
+    public int PostgresLogicalIndexCount { get; set; }
     public int PostgresPartitionedTableCount { get; set; }
     public int PostgresPartitionCount { get; set; }
     public List<string> PartitionDetails { get; set; } = new();

@@ -123,11 +123,6 @@ public class PostgresSchemaExtractor
                 strategyCode = strategyChar.ToString();
             }
             var strategy = PartitionParsing.ParsePostgresStrategy(strategyCode);
-            if (strategy == PartitionStrategy.None && string.Equals(strategyCode, "h", StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.Information("Skipping HASH partition metadata for PostgreSQL table {SchemaName}.{TableName}", schemaName, parentTable);
-                continue;
-            }
 
             if (!partitions.TryGetValue(parentTable, out var metadata))
             {
@@ -172,7 +167,7 @@ public class PostgresSchemaExtractor
             FROM pg_catalog.pg_class c
             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
             WHERE n.nspname = $1 
-              AND c.relkind = 'r'
+                            AND c.relkind IN ('r', 'p')
             ORDER BY c.relname";
 
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);

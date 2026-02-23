@@ -10,7 +10,8 @@ public class PartitionParsingTests
     [InlineData("R", PartitionStrategy.Range)]
     [InlineData("l", PartitionStrategy.List)]
     [InlineData("L", PartitionStrategy.List)]
-    [InlineData("h", PartitionStrategy.None)]
+    [InlineData("h", PartitionStrategy.Hash)]
+    [InlineData("H", PartitionStrategy.Hash)]
     [InlineData("", PartitionStrategy.None)]
     [InlineData(null, PartitionStrategy.None)]
     public void ParsePostgresStrategy_MapsExpectedValues(string? strategyCode, PartitionStrategy expected)
@@ -25,7 +26,8 @@ public class PartitionParsingTests
     [InlineData("range", PartitionStrategy.Range)]
     [InlineData("LIST", PartitionStrategy.List)]
     [InlineData("list", PartitionStrategy.List)]
-    [InlineData("HASH", PartitionStrategy.None)]
+    [InlineData("HASH", PartitionStrategy.Hash)]
+    [InlineData("hash", PartitionStrategy.Hash)]
     [InlineData("", PartitionStrategy.None)]
     [InlineData(null, PartitionStrategy.None)]
     public void ParseOracleStrategy_MapsExpectedValues(string? strategyName, PartitionStrategy expected)
