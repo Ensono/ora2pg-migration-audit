@@ -97,10 +97,22 @@ public class DatabaseConnectionManager : IDisposable
             parameter.Value = schema;
             command.Parameters.Add(parameter);
             
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
+            using (var reader = command.ExecuteReader())
             {
-                tables.Add(reader.GetString(0));
+                while (reader.Read())
+                {
+                    tables.Add(reader.GetString(0));
+                }
+            }
+
+            if (dbType == DatabaseType.PostgreSQL)
+            {
+                var partitionChildren = GetPostgresPartitionChildren(connection, schema);
+                if (partitionChildren.Count > 0)
+                {
+                    tables = tables.Where(t => !partitionChildren.Contains(t)).ToList();
+                    _logger.Information("Excluded {Count} PostgreSQL partition table(s) from schema discovery", partitionChildren.Count);
+                }
             }
         }
         catch (Exception ex)
@@ -118,6 +130,33 @@ public class DatabaseConnectionManager : IDisposable
         }
 
         return filteredTables;
+    }
+
+    private HashSet<string> GetPostgresPartitionChildren(IDbConnection connection, string schema)
+    {
+        var children = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT child.relname
+            FROM pg_catalog.pg_partitioned_table part
+            JOIN pg_catalog.pg_class parent ON parent.oid = part.partrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = parent.relnamespace
+            JOIN pg_catalog.pg_inherits inh ON inh.inhparent = parent.oid
+            JOIN pg_catalog.pg_class child ON child.oid = inh.inhrelid
+            WHERE n.nspname = @schema";
+
+        var parameter = command.CreateParameter();
+        parameter.ParameterName = "@schema";
+        parameter.Value = schema.ToLower();
+        command.Parameters.Add(parameter);
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            children.Add(reader.GetString(0));
+        }
+
+        return children;
     }
 
 

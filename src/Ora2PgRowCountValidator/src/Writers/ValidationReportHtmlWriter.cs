@@ -142,7 +142,23 @@ public class ValidationReportHtmlWriter : BaseHtmlReportWriter
                 
                 if (!issue.MissingInPostgres.Any() && !issue.ExtraInPostgres.Any())
                 {
-                    sb.AppendLine("                    -");
+                    if (!issue.PartitionRowCounts.Any())
+                    {
+                        sb.AppendLine("                    -");
+                    }
+                }
+
+                if (issue.PartitionRowCounts.Any())
+                {
+                    sb.AppendLine("                    <div class=\"pk-list\">");
+                    sb.AppendLine("                        <strong>Partition Breakdown:</strong>");
+                    sb.AppendLine("                        <ul>");
+                    foreach (var partition in issue.PartitionRowCounts.OrderBy(p => p.PartitionName))
+                    {
+                        sb.AppendLine($"                            <li>{EscapeHtml(partition.PartitionName)}: {partition.RowCount:N0}</li>");
+                    }
+                    sb.AppendLine("                        </ul>");
+                    sb.AppendLine("                    </div>");
                 }
                 
                 sb.AppendLine("                </td>");

@@ -197,7 +197,8 @@ public class RowCountComparer
                 PostgresRowCount = postgres.RowCount,
                 Difference = 0,
                 PercentageDifference = 0,
-                Message = $"✅ Row counts match: {oracle.RowCount:N0} rows"
+                Message = $"✅ Row counts match: {oracle.RowCount:N0} rows",
+                PartitionRowCounts = postgres.PartitionRowCounts.ToList()
             };
             result.Issues.Add(issue);
         }
@@ -227,7 +228,8 @@ public class RowCountComparer
                 Message = $"Row count mismatch: Oracle {oracle.RowCount:N0} vs PostgreSQL {postgres.RowCount:N0} ({difference:N0} difference, {percentageDiff:F2}%)",
                 Recommendation = severity == ValidationSeverity.Critical
                     ? "CRITICAL: Large difference detected. Review migration logs and data integrity."
-                    : "Review data migration process. Check for data filtering, transformation issues, or ongoing transactions."
+                    : "Review data migration process. Check for data filtering, transformation issues, or ongoing transactions.",
+                PartitionRowCounts = postgres.PartitionRowCounts.ToList()
             };
             result.Issues.Add(issue);
         }

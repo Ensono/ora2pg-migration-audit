@@ -3,6 +3,8 @@ using Oracle.ManagedDataAccess.Client;
 using Npgsql;
 using Serilog;
 using Ora2PgPerformanceValidator.Models;
+using Ora2Pg.Common.Util;
+using Ora2Pg.Common.Config;
 
 namespace Ora2PgPerformanceValidator.Executors;
 
@@ -16,19 +18,54 @@ public class QueryExecutor
     private readonly int _warmupRuns;
     private readonly int _measurementRuns;
     private readonly int _thresholdPercent;
+    private readonly ObjectFilter _objectFilter;
+    private readonly string _oracleSchema;
+    private readonly string _postgresSchema;
+    private readonly HashSet<string> _oracleSkipColumns;
+    private readonly HashSet<string> _postgresSkipColumns;
 
     public QueryExecutor(
         string oracleConnectionString, 
         string postgresConnectionString,
+        ObjectFilter objectFilter,
+        string oracleSchema,
+        string postgresSchema,
         int warmupRuns = 1,
         int measurementRuns = 3,
         int thresholdPercent = 50)
     {
         _oracleConnectionString = oracleConnectionString;
         _postgresConnectionString = postgresConnectionString;
+        _objectFilter = objectFilter;
+        _oracleSchema = oracleSchema;
+        _postgresSchema = postgresSchema;
         _warmupRuns = warmupRuns;
         _measurementRuns = measurementRuns;
         _thresholdPercent = thresholdPercent;
+        
+        var props = ApplicationProperties.Instance;
+        var oracleSkipColumnsConfig = props.Get("ORACLE_SKIP_COLUMNS", string.Empty);
+        var postgresSkipColumnsConfig = props.Get("POSTGRES_SKIP_COLUMNS", string.Empty);
+        
+        _oracleSkipColumns = new HashSet<string>(
+            oracleSkipColumnsConfig.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            StringComparer.OrdinalIgnoreCase
+        );
+        
+        _postgresSkipColumns = new HashSet<string>(
+            postgresSkipColumnsConfig.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            StringComparer.OrdinalIgnoreCase
+        );
+        
+        if (_oracleSkipColumns.Any())
+        {
+            _logger.Information("Oracle columns to skip: {Columns}", string.Join(", ", _oracleSkipColumns));
+        }
+        
+        if (_postgresSkipColumns.Any())
+        {
+            _logger.Information("PostgreSQL columns to skip: {Columns}", string.Join(", ", _postgresSkipColumns));
+        }
     }
 
     public async Task<QueryPerformanceResult> ExecuteQueryPairAsync(
@@ -93,6 +130,9 @@ public class QueryExecutor
 
         var times = new List<double>();
         long rowCount = 0;
+        int? tableNameColumnIndex = null;
+        int? columnNameColumnIndex = null;
+        bool checkedForColumns = false;
 
         for (int i = 0; i < _measurementRuns; i++)
         {
@@ -103,8 +143,49 @@ public class QueryExecutor
             
             await using var reader = await cmd.ExecuteReaderAsync();
             long currentRowCount = 0;
+            
+            // Detect filterable columns on first measurement run
+            if (!checkedForColumns)
+            {
+                for (int col = 0; col < reader.FieldCount; col++)
+                {
+                    var colName = reader.GetName(col);
+                    if (colName.Equals("TABLE_NAME", StringComparison.OrdinalIgnoreCase))
+                    {
+                        tableNameColumnIndex = col;
+                        _logger.Debug("Detected TABLE_NAME column at index {Index} - applying ObjectFilter", col);
+                    }
+                    else if (colName.Equals("COLUMN_NAME", StringComparison.OrdinalIgnoreCase))
+                    {
+                        columnNameColumnIndex = col;
+                        _logger.Debug("Detected COLUMN_NAME column at index {Index} - applying column skip filter", col);
+                    }
+                }
+                checkedForColumns = true;
+            }
+            
             while (await reader.ReadAsync())
             {
+                // If query returns table names, filter using ObjectFilter
+                if (tableNameColumnIndex.HasValue)
+                {
+                    var tableName = reader.GetString(tableNameColumnIndex.Value);
+                    if (_objectFilter.IsTableExcluded(tableName, _oracleSchema))
+                    {
+                        continue; // Skip excluded table
+                    }
+                }
+                
+                // If query returns column names, filter using skip columns
+                if (columnNameColumnIndex.HasValue && !reader.IsDBNull(columnNameColumnIndex.Value))
+                {
+                    var columnName = reader.GetString(columnNameColumnIndex.Value);
+                    if (_oracleSkipColumns.Contains(columnName))
+                    {
+                        continue; // Skip excluded column
+                    }
+                }
+                
                 currentRowCount++;
             }
             
@@ -131,6 +212,9 @@ public class QueryExecutor
 
         var times = new List<double>();
         long rowCount = 0;
+        int? tableNameColumnIndex = null;
+        int? columnNameColumnIndex = null;
+        bool checkedForColumns = false;
 
         for (int i = 0; i < _measurementRuns; i++)
         {
@@ -141,8 +225,49 @@ public class QueryExecutor
             
             await using var reader = await cmd.ExecuteReaderAsync();
             long currentRowCount = 0;
+            
+            // Detect filterable columns on first measurement run
+            if (!checkedForColumns)
+            {
+                for (int col = 0; col < reader.FieldCount; col++)
+                {
+                    var colName = reader.GetName(col);
+                    if (colName.Equals("table_name", StringComparison.OrdinalIgnoreCase))
+                    {
+                        tableNameColumnIndex = col;
+                        _logger.Debug("Detected table_name column at index {Index} - applying ObjectFilter", col);
+                    }
+                    else if (colName.Equals("column_name", StringComparison.OrdinalIgnoreCase))
+                    {
+                        columnNameColumnIndex = col;
+                        _logger.Debug("Detected column_name column at index {Index} - applying column skip filter", col);
+                    }
+                }
+                checkedForColumns = true;
+            }
+            
             while (await reader.ReadAsync())
             {
+                // If query returns table names, filter using ObjectFilter
+                if (tableNameColumnIndex.HasValue)
+                {
+                    var tableName = reader.GetString(tableNameColumnIndex.Value);
+                    if (_objectFilter.IsTableExcluded(tableName, _postgresSchema))
+                    {
+                        continue; // Skip excluded table
+                    }
+                }
+                
+                // If query returns column names, filter using skip columns
+                if (columnNameColumnIndex.HasValue && !reader.IsDBNull(columnNameColumnIndex.Value))
+                {
+                    var columnName = reader.GetString(columnNameColumnIndex.Value);
+                    if (_postgresSkipColumns.Contains(columnName))
+                    {
+                        continue; // Skip excluded column
+                    }
+                }
+                
                 currentRowCount++;
             }
             

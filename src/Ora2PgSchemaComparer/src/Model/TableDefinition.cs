@@ -8,7 +8,9 @@ public class TableDefinition
     public List<ColumnDefinition> Columns { get; set; } = new();
     public string? TableComment { get; set; }
     public bool IsPartitioned { get; set; }
-    public string? PartitioningStrategy { get; set; }
+    public PartitionStrategy PartitionStrategy { get; set; } = PartitionStrategy.None;
+    public List<string> PartitionColumns { get; set; } = new();
+    public List<PartitionDefinition> Partitions { get; set; } = new();
     
     public override string ToString() => FullName;
 }

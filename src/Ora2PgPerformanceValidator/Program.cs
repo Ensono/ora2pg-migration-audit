@@ -1,5 +1,6 @@
 using Ora2Pg.Common.Config;
 using Ora2Pg.Common.Connection;
+using Ora2Pg.Common.Util;
 using Ora2PgPerformanceValidator.Loaders;
 using Ora2PgPerformanceValidator.Executors;
 using Ora2PgPerformanceValidator.Writers;
@@ -99,9 +100,17 @@ try
     Log.Information("  Performance threshold: {Threshold}%", thresholdPercent);
     Log.Information("");
 
+    var objectFilter = ObjectFilter.FromProperties(props);
+    
+    var oracleSchema = queryParameters["ORACLE_SCHEMA"];
+    var postgresSchema = queryParameters["POSTGRES_SCHEMA"];
+
     var executor = new QueryExecutor(
         oracleConfig.GetOracleConnectionString(),
         postgresConfig.GetPostgresConnectionString(),
+        objectFilter,
+        oracleSchema,
+        postgresSchema,
         warmupRuns,
         measurementRuns,
         thresholdPercent);

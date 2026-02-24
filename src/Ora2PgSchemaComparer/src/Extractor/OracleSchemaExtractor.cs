@@ -5,6 +5,7 @@ using Ora2Pg.Common.Connection;
 using Ora2Pg.Common.Config;
 using Ora2Pg.Common.Util;
 using Ora2PgSchemaComparer.Model;
+using Ora2PgSchemaComparer.Util;
 
 namespace Ora2PgSchemaComparer.Extractor;
 
@@ -44,6 +45,8 @@ public class OracleSchemaExtractor
         };
 
         schema.Tables = ExtractTables(schemaName);
+        schema.Partitions = ExtractPartitionMetadata(schemaName);
+        AttachPartitionMetadata(schema);
         schema.Constraints = ExtractConstraints(schemaName);
         schema.Indexes = ExtractIndexes(schemaName);
         schema.Sequences = ExtractSequences(schemaName);
@@ -55,6 +58,125 @@ public class OracleSchemaExtractor
             schema.TableCount, schema.Constraints.Count, schema.IndexCount);
 
         return schema;
+    }
+
+    private void AttachPartitionMetadata(SchemaDefinition schema)
+    {
+        if (!schema.Partitions.Any())
+        {
+            return;
+        }
+
+        var tableMap = schema.Tables.ToDictionary(t => t.TableName, StringComparer.OrdinalIgnoreCase);
+        foreach (var metadata in schema.Partitions)
+        {
+            if (!tableMap.TryGetValue(metadata.ParentTableName, out var table))
+            {
+                continue;
+            }
+
+            table.IsPartitioned = true;
+            table.PartitionStrategy = metadata.Strategy;
+            table.PartitionColumns = metadata.PartitionColumns.ToList();
+            table.Partitions = metadata.Partitions.ToList();
+        }
+    }
+
+    private List<PartitionMetadata> ExtractPartitionMetadata(string schemaName)
+    {
+        var partitions = new Dictionary<string, PartitionMetadata>(StringComparer.OrdinalIgnoreCase);
+
+        using var connection = _connectionManager.GetConnection(DatabaseType.Oracle);
+        connection.Open();
+
+        var tableQuery = @"
+            SELECT pt.table_name,
+                   pt.partitioning_type,
+                   pk.column_name,
+                   pk.column_position
+            FROM all_part_tables pt
+            LEFT JOIN all_part_key_columns pk
+              ON pk.owner = pt.owner AND pk.name = pt.table_name
+            WHERE pt.owner = :schema
+            ORDER BY pt.table_name, pk.column_position";
+
+        using (var cmd = new OracleCommand(tableQuery, (OracleConnection)connection))
+        {
+            cmd.Parameters.Add(new OracleParameter("schema", schemaName.ToUpper()));
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var tableName = reader.GetString(0);
+                if (_objectFilter.IsTableExcluded(tableName, schemaName))
+                {
+                    continue;
+                }
+
+                var strategyName = reader.IsDBNull(1) ? null : reader.GetString(1);
+                var strategy = PartitionParsing.ParseOracleStrategy(strategyName);
+                if (strategy == PartitionStrategy.None)
+                {
+                    if (!string.IsNullOrWhiteSpace(strategyName))
+                    {
+                        _logger.Information("Skipping {Strategy} partition metadata for Oracle table {SchemaName}.{TableName}", strategyName, schemaName, tableName);
+                    }
+
+                    continue;
+                }
+
+                if (!partitions.TryGetValue(tableName, out var metadata))
+                {
+                    metadata = new PartitionMetadata
+                    {
+                        ParentTableName = tableName,
+                        Strategy = strategy
+                    };
+                    partitions[tableName] = metadata;
+                }
+
+                if (!reader.IsDBNull(2))
+                {
+                    metadata.PartitionColumns.Add(reader.GetString(2));
+                }
+            }
+        }
+
+        if (!partitions.Any())
+        {
+            return partitions.Values.ToList();
+        }
+
+         var partitionQuery = @"
+             SELECT table_name,
+                 partition_name
+             FROM all_tab_partitions
+             WHERE table_owner = :schema
+             ORDER BY table_name, partition_position";
+
+        using (var cmd = new OracleCommand(partitionQuery, (OracleConnection)connection))
+        {
+            cmd.Parameters.Add(new OracleParameter("schema", schemaName.ToUpper()));
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var tableName = reader.GetString(0);
+                if (!partitions.TryGetValue(tableName, out var metadata))
+                {
+                    continue;
+                }
+
+                var partitionName = reader.GetString(1);
+                metadata.Partitions.Add(new PartitionDefinition
+                {
+                    PartitionName = partitionName,
+                    BoundaryDefinition = null
+                });
+            }
+        }
+
+        return partitions.Values.ToList();
     }
 
     private List<TableDefinition> ExtractTables(string schemaName)

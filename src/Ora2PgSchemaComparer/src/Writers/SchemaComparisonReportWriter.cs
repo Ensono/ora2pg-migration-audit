@@ -19,24 +19,27 @@ public class SchemaComparisonReportWriter
 
         report.AppendLine("SCHEMA SUMMARY");
         report.AppendLine("--------------------------------------------------------------------------------");
-        report.AppendLine($"  Tables:       Oracle={result.OracleSchema.TableCount,-3}  PostgreSQL={result.PostgresSchema.TableCount,-3}");
-        report.AppendLine($"  Columns:      Oracle={result.OracleSchema.ColumnCount,-3}  PostgreSQL={result.PostgresSchema.ColumnCount,-3}");
-        report.AppendLine($"  Primary Keys: Oracle={result.OracleSchema.PrimaryKeyCount,-3}  PostgreSQL={result.PostgresSchema.PrimaryKeyCount,-3}");
-        report.AppendLine($"  Foreign Keys: Oracle={result.OracleSchema.ForeignKeyCount,-3}  PostgreSQL={result.PostgresSchema.ForeignKeyCount,-3}");
+        report.AppendLine($"  Tables:       Oracle={result.OracleLogicalTableCount,-3}  PostgreSQL={result.PostgresLogicalTableCount,-3}");
+        report.AppendLine($"  Columns:      Oracle={result.OracleLogicalColumnCount,-3}  PostgreSQL={result.PostgresLogicalColumnCount,-3}");
+        report.AppendLine($"  Primary Keys: Oracle={result.OracleLogicalPrimaryKeyCount,-3}  PostgreSQL={result.PostgresLogicalPrimaryKeyCount,-3}");
+        report.AppendLine($"  Foreign Keys: Oracle={result.OracleLogicalForeignKeyCount,-3}  PostgreSQL={result.PostgresLogicalForeignKeyCount,-3}");
         report.AppendLine();
 
         report.AppendLine("1. TABLES & STRUCTURE");
         report.AppendLine("--------------------------------------------------------------------------------");
-        report.AppendLine("   " + GetCheckmark(result.OracleSchema.TableCount == result.PostgresSchema.TableCount) + 
+        report.AppendLine("   " + GetCheckmark(result.OracleLogicalTableCount == result.PostgresLogicalTableCount) + 
             $" Table Count:");
-        report.AppendLine($"     Oracle:     {result.OracleSchema.TableCount} tables");
-        report.AppendLine($"     PostgreSQL: {result.PostgresSchema.TableCount} tables");
+        report.AppendLine($"     Oracle (Logical):     {result.OracleLogicalTableCount} tables");
+        report.AppendLine($"     PostgreSQL (Logical): {result.PostgresLogicalTableCount} tables");
+        report.AppendLine($"     PostgreSQL (Physical): {result.PostgresPhysicalTableCount} tables");
+        report.AppendLine($"     Partitioned Tables:  {result.PostgresPartitionedTableCount}");
+        report.AppendLine($"     Total Partitions:    {result.PostgresPartitionCount}");
         report.AppendLine();
         
-        report.AppendLine("   " + GetCheckmark(result.OracleSchema.ColumnCount == result.PostgresSchema.ColumnCount) +
+        report.AppendLine("   " + GetCheckmark(result.OracleLogicalColumnCount == result.PostgresLogicalColumnCount) +
             $" Column Count:");
-        report.AppendLine($"     Oracle:     {result.OracleSchema.ColumnCount} columns");
-        report.AppendLine($"     PostgreSQL: {result.PostgresSchema.ColumnCount} columns");
+        report.AppendLine($"     Oracle (Logical):     {result.OracleLogicalColumnCount} columns");
+        report.AppendLine($"     PostgreSQL (Logical): {result.PostgresLogicalColumnCount} columns");
         report.AppendLine();
         
         if (result.TableIssues.Any())
@@ -49,30 +52,40 @@ public class SchemaComparisonReportWriter
             report.AppendLine();
         }
 
+        if (result.PartitionDetails.Any())
+        {
+            report.AppendLine("   Partition Details:");
+            foreach (var detail in result.PartitionDetails)
+            {
+                report.AppendLine($"     {detail}");
+            }
+            report.AppendLine();
+        }
+
         report.AppendLine("2. CONSTRAINTS");
         report.AppendLine("--------------------------------------------------------------------------------");
-        report.AppendLine("   " + GetCheckmark(result.OracleSchema.PrimaryKeyCount == result.PostgresSchema.PrimaryKeyCount) +
+        report.AppendLine("   " + GetCheckmark(result.OracleLogicalPrimaryKeyCount == result.PostgresLogicalPrimaryKeyCount) +
             $" Primary Keys:");
-        report.AppendLine($"     Oracle:     {result.OracleSchema.PrimaryKeyCount} primary keys");
-        report.AppendLine($"     PostgreSQL: {result.PostgresSchema.PrimaryKeyCount} primary keys");
+        report.AppendLine($"     Oracle:     {result.OracleLogicalPrimaryKeyCount} primary keys");
+        report.AppendLine($"     PostgreSQL: {result.PostgresLogicalPrimaryKeyCount} primary keys");
         report.AppendLine();
         
-        report.AppendLine("   " + GetCheckmark(result.OracleSchema.ForeignKeyCount == result.PostgresSchema.ForeignKeyCount) +
+        report.AppendLine("   " + GetCheckmark(result.OracleLogicalForeignKeyCount == result.PostgresLogicalForeignKeyCount) +
             $" Foreign Keys:");
-        report.AppendLine($"     Oracle:     {result.OracleSchema.ForeignKeyCount} foreign keys");
-        report.AppendLine($"     PostgreSQL: {result.PostgresSchema.ForeignKeyCount} foreign keys");
+        report.AppendLine($"     Oracle:     {result.OracleLogicalForeignKeyCount} foreign keys");
+        report.AppendLine($"     PostgreSQL: {result.PostgresLogicalForeignKeyCount} foreign keys");
         report.AppendLine();
         
-        report.AppendLine("   " + GetCheckmark(result.OracleSchema.UniqueConstraintCount == result.PostgresSchema.UniqueConstraintCount) +
+        report.AppendLine("   " + GetCheckmark(result.OracleLogicalUniqueConstraintCount == result.PostgresLogicalUniqueConstraintCount) +
             $" Unique Constraints:");
-        report.AppendLine($"     Oracle:     {result.OracleSchema.UniqueConstraintCount} unique constraints");
-        report.AppendLine($"     PostgreSQL: {result.PostgresSchema.UniqueConstraintCount} unique constraints");
+        report.AppendLine($"     Oracle:     {result.OracleLogicalUniqueConstraintCount} unique constraints");
+        report.AppendLine($"     PostgreSQL: {result.PostgresLogicalUniqueConstraintCount} unique constraints");
         report.AppendLine();
         
-        report.AppendLine("   " + GetCheckmark(result.OracleSchema.CheckConstraintCount == result.PostgresSchema.CheckConstraintCount) +
+        report.AppendLine("   " + GetCheckmark(result.OracleLogicalCheckConstraintCount == result.PostgresLogicalCheckConstraintCount) +
             $" Check Constraints:");
-        report.AppendLine($"     Oracle:     {result.OracleSchema.CheckConstraintCount} check constraints");
-        report.AppendLine($"     PostgreSQL: {result.PostgresSchema.CheckConstraintCount} check constraints");
+        report.AppendLine($"     Oracle:     {result.OracleLogicalCheckConstraintCount} check constraints");
+        report.AppendLine($"     PostgreSQL: {result.PostgresLogicalCheckConstraintCount} check constraints");
         report.AppendLine();
         
         if (result.ConstraintIssues.Any())
@@ -87,10 +100,10 @@ public class SchemaComparisonReportWriter
 
         report.AppendLine("3. INDEXES");
         report.AppendLine("--------------------------------------------------------------------------------");
-        report.AppendLine("   " + GetCheckmark(result.OracleSchema.IndexCount == result.PostgresSchema.IndexCount) +
+        report.AppendLine("   " + GetCheckmark(result.OracleLogicalIndexCount == result.PostgresLogicalIndexCount) +
             $" Index Count:");
-        report.AppendLine($"     Oracle:     {result.OracleSchema.IndexCount} indexes");
-        report.AppendLine($"     PostgreSQL: {result.PostgresSchema.IndexCount} indexes");
+        report.AppendLine($"     Oracle:     {result.OracleLogicalIndexCount} indexes");
+        report.AppendLine($"     PostgreSQL: {result.PostgresLogicalIndexCount} indexes");
         report.AppendLine();
         
         if (result.IndexIssues.Any())

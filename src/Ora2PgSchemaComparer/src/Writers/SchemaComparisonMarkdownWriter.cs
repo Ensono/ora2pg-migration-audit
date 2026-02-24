@@ -39,15 +39,15 @@ public class SchemaComparisonMarkdownWriter
         sb.AppendLine("| Object Type | Oracle | PostgreSQL | Match |");
         sb.AppendLine("|------------|--------|------------|-------|");
         
-        var tablesMatch = result.OracleSchema.TableCount == result.PostgresSchema.TableCount ? "✅" : "❌";
-        var columnsMatch = result.OracleSchema.ColumnCount == result.PostgresSchema.ColumnCount ? "✅" : "❌";
-        var pksMatch = result.OracleSchema.PrimaryKeyCount == result.PostgresSchema.PrimaryKeyCount ? "✅" : "❌";
-        var fksMatch = result.OracleSchema.ForeignKeyCount == result.PostgresSchema.ForeignKeyCount ? "✅" : "❌";
+        var tablesMatch = result.OracleLogicalTableCount == result.PostgresLogicalTableCount ? "✅" : "❌";
+        var columnsMatch = result.OracleLogicalColumnCount == result.PostgresLogicalColumnCount ? "✅" : "❌";
+        var pksMatch = result.OracleLogicalPrimaryKeyCount == result.PostgresLogicalPrimaryKeyCount ? "✅" : "❌";
+        var fksMatch = result.OracleLogicalForeignKeyCount == result.PostgresLogicalForeignKeyCount ? "✅" : "❌";
         
-        sb.AppendLine($"| Tables | {result.OracleSchema.TableCount} | {result.PostgresSchema.TableCount} | {tablesMatch} |");
-        sb.AppendLine($"| Columns | {result.OracleSchema.ColumnCount} | {result.PostgresSchema.ColumnCount} | {columnsMatch} |");
-        sb.AppendLine($"| Primary Keys | {result.OracleSchema.PrimaryKeyCount} | {result.PostgresSchema.PrimaryKeyCount} | {pksMatch} |");
-        sb.AppendLine($"| Foreign Keys | {result.OracleSchema.ForeignKeyCount} | {result.PostgresSchema.ForeignKeyCount} | {fksMatch} |");
+        sb.AppendLine($"| Tables | {result.OracleLogicalTableCount} | {result.PostgresLogicalTableCount} | {tablesMatch} |");
+        sb.AppendLine($"| Columns | {result.OracleLogicalColumnCount} | {result.PostgresLogicalColumnCount} | {columnsMatch} |");
+        sb.AppendLine($"| Primary Keys | {result.OracleLogicalPrimaryKeyCount} | {result.PostgresLogicalPrimaryKeyCount} | {pksMatch} |");
+        sb.AppendLine($"| Foreign Keys | {result.OracleLogicalForeignKeyCount} | {result.PostgresLogicalForeignKeyCount} | {fksMatch} |");
         sb.AppendLine();
 
         sb.AppendLine("### Issues Summary");

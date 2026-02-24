@@ -33,4 +33,7 @@ public class RowCountIssue
     
 
     public string? DetailedComparisonSkippedReason { get; set; }
+
+
+    public List<PartitionRowCount> PartitionRowCounts { get; set; } = new();
 }
