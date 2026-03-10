@@ -49,6 +49,22 @@ public class DataTypeValidator
         var oracleType = oracle.DataType.ToUpper();
         var postgresType = postgres.DataType.ToLower();
 
+        var isCompatible = TypeMappingRules.IsCompatibleMapping(oracle, postgres, out var mismatchReason);
+        var expectedMapping = TypeMappingRules.GetExpectedMapping(oracle);
+
+        if (!isCompatible && expectedMapping.ExpectedType != null)
+        {
+            AddIssue(oracle, postgres, ValidationSeverity.Error, "Type Mapping Mismatch",
+                $"{expectedMapping.MappingDescription}. {mismatchReason}",
+                $"Expected: {FormatExpectedType(expectedMapping)}, Got: {FormatPostgresType(postgres)}");
+        }
+        else if (isCompatible)
+        {
+            AddIssue(oracle, postgres, ValidationSeverity.Info, "Valid Mapping",
+                $"{expectedMapping.MappingDescription} ✓",
+                null);
+        }
+
         ValidateNumericTypes(oracle, postgres, oracleType, postgresType);
 
         ValidateStringTypes(oracle, postgres, oracleType, postgresType);
@@ -64,6 +80,20 @@ public class DataTypeValidator
         ValidateEmptyStringHandling(oracle, postgres, oracleType, postgresType);
     }
 
+    private string FormatExpectedType(TypeMappingResult mapping)
+    {
+        if (mapping.ExpectedType == null) return "Unknown";
+        
+        var type = mapping.ExpectedType.ToUpper();
+        if (mapping.ExpectedPrecision.HasValue && mapping.ExpectedScale.HasValue)
+            return $"{type}({mapping.ExpectedPrecision},{mapping.ExpectedScale})";
+        if (mapping.ExpectedPrecision.HasValue)
+            return $"{type}({mapping.ExpectedPrecision})";
+        if (mapping.ExpectedLength.HasValue)
+            return $"{type}({mapping.ExpectedLength})";
+        return type;
+    }
+
     #region Numeric Type Validations
 
     private void ValidateNumericTypes(ColumnMetadata oracle, ColumnMetadata postgres, string oracleType, string postgresType)
@@ -72,8 +102,7 @@ public class DataTypeValidator
         {
             ValidateNumberPrecisionZero(oracle, postgres, postgresType);
         }
-
-        if (oracleType == "NUMBER" && oracle.DataPrecision.HasValue && oracle.DataScale.HasValue)
+        else if (oracleType == "NUMBER" && oracle.DataPrecision.HasValue && oracle.DataScale.HasValue && oracle.DataScale > 0)
         {
             ValidateNumberWithPrecisionScale(oracle, postgres, postgresType);
         }
@@ -93,20 +122,22 @@ public class DataTypeValidator
     private void ValidateNumberPrecisionZero(ColumnMetadata oracle, ColumnMetadata postgres, string postgresType)
     {
         var precision = oracle.DataPrecision ?? 38;
+        
+        var baseType = ExtractBaseType(postgresType);
 
-        if (precision > 9 && postgresType == "integer")
+        if (precision > 9 && baseType == "integer")
         {
             AddIssue(oracle, postgres, ValidationSeverity.Critical, "Numeric Overflow Risk",
                 $"NUMBER({precision},0) mapped to INTEGER but can overflow. Values > 2 billion will fail.",
                 "Change to BIGINT for values > 2,147,483,647");
         }
-        else if (precision <= 9 && postgresType == "bigint")
+        else if (precision <= 9 && baseType == "bigint")
         {
             AddIssue(oracle, postgres, ValidationSeverity.Info, "Storage Optimization",
                 $"NUMBER({precision},0) uses BIGINT but INTEGER would suffice (8 bytes vs 4 bytes).",
                 "Consider using INTEGER for better storage efficiency");
         }
-        else if (!new[] { "integer", "bigint", "numeric", "smallint" }.Contains(postgresType))
+        else if (!new[] { "integer", "bigint", "numeric", "smallint" }.Contains(baseType))
         {
             AddIssue(oracle, postgres, ValidationSeverity.Error, "Invalid Mapping",
                 $"NUMBER({precision},0) mapped to {postgresType.ToUpper()} instead of INTEGER/BIGINT.",
@@ -118,7 +149,9 @@ public class DataTypeValidator
     {
         var expectedType = $"numeric({oracle.DataPrecision},{oracle.DataScale})";
         
-        if (!postgresType.StartsWith("numeric"))
+        var baseType = ExtractBaseType(postgresType);
+        
+        if (!baseType.StartsWith("numeric"))
         {
             AddIssue(oracle, postgres, ValidationSeverity.Error, "Precision/Scale Mismatch",
                 $"NUMBER({oracle.DataPrecision},{oracle.DataScale}) should map to NUMERIC, not {postgresType.ToUpper()}.",
@@ -139,7 +172,9 @@ public class DataTypeValidator
 
     private void ValidateFloatTypes(ColumnMetadata oracle, ColumnMetadata postgres, string oracleType, string postgresType)
     {
-        if (postgresType != "double precision")
+        var baseType = ExtractBaseType(postgresType);
+        
+        if (baseType != "double precision" && baseType != "double")
         {
             AddIssue(oracle, postgres, ValidationSeverity.Error, "Float Type Mismatch",
                 $"{oracleType} should map to DOUBLE PRECISION, not {postgresType.ToUpper()}.",
@@ -147,9 +182,9 @@ public class DataTypeValidator
         }
         else
         {
-            AddIssue(oracle, postgres, ValidationSeverity.Warning, "Rounding Errors",
-                $"{oracleType} -> DOUBLE PRECISION may introduce rounding errors in scientific calculations.",
-                "Validate that precision loss is acceptable for your use case");
+            AddIssue(oracle, postgres, ValidationSeverity.Info, "Valid Float Mapping",
+                $"DMS maps {oracleType} to DOUBLE PRECISION ✓",
+                null);
         }
     }
 
@@ -197,32 +232,29 @@ public class DataTypeValidator
 
     private void ValidateVarchar2(ColumnMetadata oracle, ColumnMetadata postgres, string postgresType)
     {
-        if (!postgresType.StartsWith("character varying") && postgresType != "varchar" && postgresType != "text")
+        var baseType = ExtractBaseType(postgresType);
+        
+        if (!baseType.StartsWith("character varying") && baseType != "varchar" && baseType != "text")
         {
             AddIssue(oracle, postgres, ValidationSeverity.Error, "String Type Mismatch",
                 $"VARCHAR2 should map to VARCHAR(n) or TEXT, not {postgresType.ToUpper()}.",
                 "Use CHARACTER VARYING(n) or TEXT");
         }
 
-        if (oracle.CharLength.HasValue && postgres.CharLength.HasValue)
-        {
-            AddIssue(oracle, postgres, ValidationSeverity.Warning, "Character Encoding",
-                $"Oracle VARCHAR2 length is in BYTES, PostgreSQL is in CHARACTERS. " +
-                $"Multi-byte characters (emojis, accents) may not fit if Oracle byte length = Postgres char length.",
-                "Verify character encoding compatibility for international data");
-        }
     }
 
     private void ValidateChar(ColumnMetadata oracle, ColumnMetadata postgres, string postgresType)
     {
-        if (postgresType.StartsWith("character varying") || postgresType == "varchar")
+        var baseType = ExtractBaseType(postgresType);
+        
+        if (baseType.StartsWith("character varying") || baseType == "varchar")
         {
             AddIssue(oracle, postgres, ValidationSeverity.Warning, "Padding Behavior",
                 $"CHAR({oracle.CharLength}) mapped to VARCHAR - padding behavior differs. " +
                 "Oracle pads with spaces; PostgreSQL doesn't.",
                 "Verify ETL logic handles space trimming correctly");
         }
-        else if (!postgresType.StartsWith("character") && postgresType != "char")
+        else if (!baseType.StartsWith("character") && baseType != "char")
         {
             AddIssue(oracle, postgres, ValidationSeverity.Error, "Fixed-Length Type Mismatch",
                 $"CHAR should map to CHAR(n), not {postgresType.ToUpper()}.",
@@ -232,7 +264,9 @@ public class DataTypeValidator
 
     private void ValidateClob(ColumnMetadata oracle, ColumnMetadata postgres, string postgresType)
     {
-        if (postgresType != "text")
+        var baseType = ExtractBaseType(postgresType);
+        
+        if (baseType != "text")
         {
             AddIssue(oracle, postgres, ValidationSeverity.Error, "Large Text Type Mismatch",
                 $"CLOB should map to TEXT, not {postgresType.ToUpper()}.",
@@ -253,15 +287,17 @@ public class DataTypeValidator
 
     private void ValidateDateTimeTypes(ColumnMetadata oracle, ColumnMetadata postgres, string oracleType, string postgresType)
     {
+        var baseType = ExtractBaseType(postgresType);
+        
         if (oracleType == "DATE")
         {
-            if (postgresType == "date" && !postgresType.Contains("timestamp"))
+            if (baseType == "date" && !baseType.Contains("timestamp"))
             {
                 AddIssue(oracle, postgres, ValidationSeverity.Warning, "Time Data Loss",
                     "Oracle DATE contains time (HH:MM:SS). PostgreSQL DATE does not. Time data will be lost!",
                     "Use TIMESTAMP or TIMESTAMPTZ if time component is needed");
             }
-            else if (postgresType == "timestamp without time zone" || postgresType == "timestamp")
+            else if (baseType == "timestamp without time zone" || baseType == "timestamp")
             {
                 AddIssue(oracle, postgres, ValidationSeverity.Info, "Date Mapping OK",
                     "Oracle DATE correctly mapped to TIMESTAMP.",
@@ -271,7 +307,7 @@ public class DataTypeValidator
 
         if (oracleType == "TIMESTAMP")
         {
-            if (postgresType != "timestamp without time zone" && postgresType != "timestamp")
+            if (baseType != "timestamp without time zone" && baseType != "timestamp")
             {
                 AddIssue(oracle, postgres, ValidationSeverity.Error, "Timestamp Type Mismatch",
                     $"TIMESTAMP should map to TIMESTAMP WITHOUT TIME ZONE, not {postgresType.ToUpper()}.",
@@ -304,7 +340,9 @@ public class DataTypeValidator
     {
         if (oracleType is "BLOB" or "RAW")
         {
-            if (postgresType != "bytea")
+            var baseType = ExtractBaseType(postgresType);
+            
+            if (baseType != "bytea")
             {
                 AddIssue(oracle, postgres, ValidationSeverity.Error, "Binary Type Mismatch",
                     $"{oracleType} should map to BYTEA, not {postgresType.ToUpper()}.",
@@ -312,9 +350,9 @@ public class DataTypeValidator
             }
             else
             {
-                AddIssue(oracle, postgres, ValidationSeverity.Warning, "Binary File Validation",
-                    $"{oracleType} -> BYTEA: Verify binary files (PDFs, images) can be retrieved and opened correctly.",
-                    "Test file integrity after migration");
+                AddIssue(oracle, postgres, ValidationSeverity.Info, "Valid Binary Mapping",
+                    $"DMS maps {oracleType} to BYTEA ✓",
+                    null);
             }
         }
     }
@@ -377,11 +415,19 @@ public class DataTypeValidator
 
         if (oracleType.StartsWith("RAW"))
         {
-            if (postgresType != "bytea")
+            var baseType = ExtractBaseType(postgresType);
+            
+            if (baseType != "bytea")
             {
                 AddIssue(oracle, postgres, ValidationSeverity.Error, "Fixed Binary Type",
                     $"Oracle {oracleType} should map to BYTEA, not {postgresType.ToUpper()}.",
                     "Use BYTEA for fixed-length binary data");
+            }
+            else
+            {
+                AddIssue(oracle, postgres, ValidationSeverity.Info, "Valid Binary Mapping",
+                    $"DMS maps {oracleType} to BYTEA ✓",
+                    null);
             }
         }
 
@@ -471,11 +517,19 @@ public class DataTypeValidator
 
         if (oracleType == "BINARY_DOUBLE")
         {
-            if (postgresType != "double precision")
+            var baseType = ExtractBaseType(postgresType);
+            
+            if (baseType != "double precision" && baseType != "double")
             {
                 AddIssue(oracle, postgres, ValidationSeverity.Error, "Double Precision Float",
-                    "Oracle BINARY_DOUBLE should map to DOUBLE PRECISION, not {postgresType.ToUpper()}.",
-                    "Use DOUBLE PRECISION for 8-byte floating point");
+                    $"Oracle BINARY_DOUBLE should map to DOUBLE PRECISION or DOUBLE, not {postgresType.ToUpper()}.",
+                    "Use DOUBLE PRECISION or DOUBLE for 8-byte floating point");
+            }
+            else
+            {
+                AddIssue(oracle, postgres, ValidationSeverity.Info, "Valid Binary Double Mapping",
+                    $"DMS maps BINARY_DOUBLE to DOUBLE (DOUBLE PRECISION) ✓",
+                    null);
             }
         }
 
@@ -555,13 +609,6 @@ public class DataTypeValidator
 
     private void ValidateEmptyStringHandling(ColumnMetadata oracle, ColumnMetadata postgres, string oracleType, string postgresType)
     {
-        if (oracleType is "VARCHAR2" or "CHAR" or "CLOB")
-        {
-            AddIssue(oracle, postgres, ValidationSeverity.Critical, "Empty String Handling",
-                "CRITICAL: Oracle treats '' (empty string) as NULL. PostgreSQL treats '' as an empty string. " +
-                "Validate ETL logic handled this conversion correctly.",
-                "Review data migration scripts for empty string -> NULL conversions");
-        }
     }
 
     #endregion
@@ -610,10 +657,30 @@ public class DataTypeValidator
     private string FormatPostgresType(ColumnMetadata col)
     {
         var type = col.DataType;
-        if (col.DataPrecision.HasValue && col.DataScale.HasValue)
+        
+        if (type.Contains('('))
+        {
+            return type;
+        }
+
+        if (type == "integer" || type == "bigint" || type == "smallint" || 
+            type == "serial" || type == "bigserial" || type == "smallserial")
+        {
+            return type;
+        }
+        
+        if (col.DataPrecision.HasValue && col.DataScale.HasValue && type == "numeric")
             return $"{type}({col.DataPrecision},{col.DataScale})";
-        if (col.CharLength.HasValue)
+        
+        if (col.CharLength.HasValue && (type == "character varying" || type == "character" || type == "varchar" || type == "char"))
             return $"{type}({col.CharLength})";
+            
         return type;
+    }
+
+    private string ExtractBaseType(string type)
+    {
+        var parenIndex = type.IndexOf('(');
+        return parenIndex > 0 ? type.Substring(0, parenIndex) : type;
     }
 }

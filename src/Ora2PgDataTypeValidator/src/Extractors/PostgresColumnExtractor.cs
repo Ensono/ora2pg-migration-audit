@@ -58,13 +58,33 @@ public class PostgresColumnExtractor
                 c.table_schema,
                 c.table_name,
                 c.column_name,
-                c.data_type,
+                -- Get ACTUAL PostgreSQL type as it appears in the database
+                CASE 
+                    WHEN c.data_type = 'character varying' THEN 
+                        'varchar(' || COALESCE(c.character_maximum_length::text, 'max') || ')'
+                    WHEN c.data_type = 'character' THEN 
+                        'char(' || COALESCE(c.character_maximum_length::text, '1') || ')'
+                    WHEN c.data_type = 'numeric' AND c.numeric_precision IS NOT NULL THEN
+                        CASE 
+                            WHEN c.numeric_scale IS NOT NULL AND c.numeric_scale > 0 THEN
+                                'numeric(' || c.numeric_precision || ',' || c.numeric_scale || ')'
+                            ELSE
+                                'numeric(' || c.numeric_precision || ')'
+                        END
+                    WHEN c.data_type = 'timestamp without time zone' THEN
+                        'timestamp'
+                    WHEN c.data_type = 'timestamp with time zone' THEN
+                        'timestamptz'
+                    ELSE 
+                        c.data_type
+                END AS formatted_data_type,
+                c.data_type AS base_data_type,
                 c.character_maximum_length,
                 c.numeric_precision,
                 c.numeric_scale,
                 c.is_nullable,
                 c.column_default,
-                c.character_maximum_length
+                c.character_maximum_length AS char_length
             FROM information_schema.columns c
             INNER JOIN information_schema.tables t
                 ON c.table_schema = t.table_schema
@@ -117,13 +137,13 @@ public class PostgresColumnExtractor
                 SchemaName = reader.GetString(0),
                 TableName = tableName,
                 ColumnName = columnName,
-                DataType = reader.GetString(3),
-                DataLength = reader.IsDBNull(4) ? null : reader.GetInt32(4),
-                DataPrecision = reader.IsDBNull(5) ? null : reader.GetInt32(5),
-                DataScale = reader.IsDBNull(6) ? null : reader.GetInt32(6),
-                IsNullable = reader.GetString(7) == "YES",
-                DefaultValue = reader.IsDBNull(8) ? null : reader.GetString(8),
-                CharLength = reader.IsDBNull(9) ? null : reader.GetInt32(9)
+                DataType = reader.GetString(3),  // Formatted type (e.g., "varchar(100)", "numeric(15,2)")
+                DataLength = reader.IsDBNull(5) ? null : reader.GetInt32(5),
+                DataPrecision = reader.IsDBNull(6) ? null : reader.GetInt32(6),
+                DataScale = reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                IsNullable = reader.GetString(8) == "YES",
+                DefaultValue = reader.IsDBNull(9) ? null : reader.GetString(9),
+                CharLength = reader.IsDBNull(10) ? null : reader.GetInt32(10)
             });
         }
 
