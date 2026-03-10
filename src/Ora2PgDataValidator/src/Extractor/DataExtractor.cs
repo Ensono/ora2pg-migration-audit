@@ -135,10 +135,25 @@ public class DataExtractor
             }
             else
             {
-                primaryKeyColumns.Add(columns[0].Name);
-                Log.Warning("No primary key or ID columns found for table {TableReference}, will order by first column: {FirstColumn}. " +
-                           "This may cause false positives if rows are not naturally ordered.",
-                           tableReference, columns[0].Name);
+                // Use all orderable columns (exclude BLOB, CLOB, and other non-orderable types)
+                var orderableColumns = columns
+                    .Where(c => IsOrderableColumnType(c.Type))
+                    .Select(c => c.Name)
+                    .ToList();
+                
+                if (orderableColumns.Count > 0)
+                {
+                    primaryKeyColumns.AddRange(orderableColumns);
+                    Log.Warning("No primary key or ID columns found for table {TableReference}, will order by ALL {ColumnCount} orderable column(s) for maximum consistency: {OrderColumns}",
+                               tableReference, orderableColumns.Count, string.Join(", ", orderableColumns));
+                }
+                else
+                {
+                    // Fallback: use first column even if it might not be ideal
+                    primaryKeyColumns.Add(columns[0].Name);
+                    Log.Warning("No orderable columns found for table {TableReference}, using first column as fallback: {FirstColumn}",
+                               tableReference, columns[0].Name);
+                }
             }
         }
 
@@ -149,6 +164,50 @@ public class DataExtractor
         }
 
         return new TableMetadata(tableReference, columns, primaryKeyColumns);
+    }
+
+    private bool IsOrderableColumnType(string columnType)
+    {
+        if (string.IsNullOrWhiteSpace(columnType))
+        {
+            return true; // Default to orderable if unknown
+        }
+
+        var typeUpper = columnType.ToUpperInvariant();
+
+        // Non-orderable types (case-insensitive check)
+        var nonOrderableTypes = new[]
+        {
+            "BLOB",           // Oracle binary large object
+            "CLOB",           // Oracle character large object
+            "NCLOB",          // Oracle national character large object
+            "BFILE",          // Oracle binary file
+            "BYTEA",          // PostgreSQL binary data
+            "JSON",           // JSON data
+            "JSONB",          // PostgreSQL binary JSON
+            "XML",            // XML data
+            "XMLTYPE",        // Oracle XML type
+            "GEOGRAPHY",      // Spatial types
+            "GEOMETRY",       // Spatial types
+            "HSTORE",         // PostgreSQL key-value store
+            "TSVECTOR",       // PostgreSQL text search
+            "TSQUERY",        // PostgreSQL text search query
+            "ARRAY",          // Array types (may not be orderable)
+            "SYSTEM.BYTE[]",  // .NET byte array representation
+            "BYTE[]"          // Byte array
+        };
+
+        // Check if column type matches any non-orderable type
+        foreach (var nonOrderableType in nonOrderableTypes)
+        {
+            if (typeUpper.Contains(nonOrderableType))
+            {
+                Log.Debug("Column type {ColumnType} is not orderable, will be excluded from ORDER BY", columnType);
+                return false;
+            }
+        }
+
+        return true;
     }
 
 
