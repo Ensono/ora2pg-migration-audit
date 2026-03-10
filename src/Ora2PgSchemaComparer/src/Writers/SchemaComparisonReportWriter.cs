@@ -68,6 +68,12 @@ public class SchemaComparisonReportWriter
             $" Primary Keys:");
         report.AppendLine($"     Oracle:     {result.OracleLogicalPrimaryKeyCount} primary keys");
         report.AppendLine($"     PostgreSQL: {result.PostgresLogicalPrimaryKeyCount} primary keys");
+        
+        if (result.SyntheticPrimaryKeyCount > 0)
+        {
+            report.AppendLine($"     Synthetic:  {result.SyntheticPrimaryKeyCount} synthetic PKs (DMS rowid - expected)");
+        }
+        
         report.AppendLine();
         
         report.AppendLine("   " + GetCheckmark(result.OracleLogicalForeignKeyCount == result.PostgresLogicalForeignKeyCount) +
@@ -181,6 +187,52 @@ public class SchemaComparisonReportWriter
             report.AppendLine("❌ Critical issues found - review and resolve before proceeding.");
         }
         
+        bool hasZeroCounts = result.OracleSchema.SequenceCount == 0 || result.OracleSchema.TriggerCount == 0 ||
+                             result.OracleSchema.ProcedureCount == 0 || result.OracleSchema.FunctionCount == 0;
+        
+        if (result.HasOracleExtractionErrors)
+        {
+            report.AppendLine();
+            report.AppendLine("================================================================================");
+            report.AppendLine("WARNING: ORACLE CODE OBJECTS EXTRACTION ERRORS");
+            report.AppendLine("================================================================================");
+            report.AppendLine();
+            report.AppendLine("The following errors occurred while extracting Oracle code objects:");
+            report.AppendLine();
+            foreach (var error in result.OracleExtractionErrors)
+            {
+                report.AppendLine($"  • {error}");
+            }
+            report.AppendLine();
+            report.AppendLine("These errors may occur due to:");
+            report.AppendLine();
+            report.AppendLine("  • User Permissions: Database user may lack SELECT privileges on system views");
+            report.AppendLine("    (all_sequences, all_triggers, all_objects)");
+            report.AppendLine("  • Schema Scope: Objects may exist in different schemas or system accounts");
+            report.AppendLine("  • Database Configuration: Oracle configuration may restrict metadata access");
+            report.AppendLine();
+            report.AppendLine("Check application logs for detailed information and verify database permissions.");
+        }
+        else if (hasZeroCounts)
+        {
+            report.AppendLine();
+            report.AppendLine("================================================================================");
+            report.AppendLine("NOTE: ORACLE CODE OBJECTS COUNT");
+            report.AppendLine("================================================================================");
+            report.AppendLine();
+            report.AppendLine("Oracle shows 0 for some code objects (sequences, triggers, procedures/functions).");
+            report.AppendLine("This may be expected if:");
+            report.AppendLine();
+            report.AppendLine("  • No Objects Exist: Schema genuinely has no sequences, triggers, or procedures");
+            report.AppendLine("  • User Permissions: Database user may lack SELECT privileges on system views");
+            report.AppendLine("    (all_sequences, all_triggers, all_objects), causing queries to return 0 rows");
+            report.AppendLine("  • Schema Scope: Objects may exist in different schemas or system accounts");
+            report.AppendLine("  • Database Configuration: Oracle configuration may restrict metadata access");
+            report.AppendLine();
+            report.AppendLine("If this is unexpected, check application logs and verify database permissions.");
+        }
+        
+        report.AppendLine();
         report.AppendLine("================================================================================");
         
         return report.ToString();

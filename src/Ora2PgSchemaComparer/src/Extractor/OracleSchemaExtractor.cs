@@ -49,15 +49,67 @@ public class OracleSchemaExtractor
         AttachPartitionMetadata(schema);
         schema.Constraints = ExtractConstraints(schemaName);
         schema.Indexes = ExtractIndexes(schemaName);
-        schema.Sequences = ExtractSequences(schemaName);
-        schema.Views = ExtractViews(schemaName);
-        schema.Triggers = ExtractTriggers(schemaName);
-        schema.Procedures = ExtractProcedures(schemaName);
+        schema.Sequences = ExtractSequencesWithErrorTracking(schemaName, schema);
+        schema.Views = ExtractViewsWithErrorTracking(schemaName, schema);
+        schema.Triggers = ExtractTriggersWithErrorTracking(schemaName, schema);
+        schema.Procedures = ExtractProceduresWithErrorTracking(schemaName, schema);
 
-        _logger.Information("✓ Extracted Oracle schema: {TableCount} tables, {ConstraintCount} constraints, {IndexCount} indexes",
-            schema.TableCount, schema.Constraints.Count, schema.IndexCount);
+        _logger.Information("✓ Extracted Oracle schema: {TableCount} tables, {ConstraintCount} constraints, {IndexCount} indexes, {SequenceCount} sequences, {ViewCount} views, {TriggerCount} triggers, {ProcedureCount} procedures/functions",
+            schema.TableCount, schema.Constraints.Count, schema.IndexCount, schema.SequenceCount, schema.ViewCount + schema.MaterializedViewCount, schema.TriggerCount, schema.Procedures.Count);
 
         return schema;
+    }
+
+    private List<SequenceDefinition> ExtractSequencesWithErrorTracking(string schemaName, SchemaDefinition schema)
+    {
+        try
+        {
+            return ExtractSequences(schemaName);
+        }
+        catch (Exception ex)
+        {
+            schema.ExtractionErrors.Add($"Sequences: {ex.Message}");
+            return new List<SequenceDefinition>();
+        }
+    }
+
+    private List<ViewDefinition> ExtractViewsWithErrorTracking(string schemaName, SchemaDefinition schema)
+    {
+        try
+        {
+            return ExtractViews(schemaName);
+        }
+        catch (Exception ex)
+        {
+            schema.ExtractionErrors.Add($"Views: {ex.Message}");
+            return new List<ViewDefinition>();
+        }
+    }
+
+    private List<TriggerDefinition> ExtractTriggersWithErrorTracking(string schemaName, SchemaDefinition schema)
+    {
+        try
+        {
+            return ExtractTriggers(schemaName);
+        }
+        catch (Exception ex)
+        {
+            schema.ExtractionErrors.Add($"Triggers: {ex.Message}");
+            return new List<TriggerDefinition>();
+        }
+    }
+
+    private List<ProcedureDefinition> ExtractProceduresWithErrorTracking(string schemaName, SchemaDefinition schema)
+    {
+        try
+        {
+            return ExtractProcedures(schemaName);
+        }
+        catch (Exception ex)
+        {
+            schema.ExtractionErrors.Add($"Procedures/Functions: {ex.Message}");
+            return new List<ProcedureDefinition>();
+        }
     }
 
     private void AttachPartitionMetadata(SchemaDefinition schema)
@@ -543,38 +595,48 @@ public class OracleSchemaExtractor
     {
         var sequences = new List<SequenceDefinition>();
         
-        using var connection = _connectionManager.GetConnection(DatabaseType.Oracle);
-        connection.Open();
-        
-        var query = $@"
-            SELECT sequence_name, last_number, increment_by, min_value, max_value, 
-                   cycle_flag, cache_size
-            FROM all_sequences
-            WHERE sequence_owner = '{schemaName.ToUpper()}'
-            ORDER BY sequence_name";
-        
-        using var cmd = new OracleCommand(query, (OracleConnection)connection);
-        
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        try
         {
-            var sequenceName = reader.GetString(0);
-            if (_objectFilter.IsObjectIgnored("sequence", sequenceName, schemaName))
+            using var connection = _connectionManager.GetConnection(DatabaseType.Oracle);
+            connection.Open();
+            
+            var query = $@"
+                SELECT sequence_name, last_number, increment_by, min_value, max_value, 
+                       cycle_flag, cache_size
+                FROM all_sequences
+                WHERE sequence_owner = '{schemaName.ToUpper()}'
+                ORDER BY sequence_name";
+            
+            using var cmd = new OracleCommand(query, (OracleConnection)connection);
+            
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
             {
-                continue;
-            }
+                var sequenceName = reader.GetString(0);
+                if (_objectFilter.IsObjectIgnored("sequence", sequenceName, schemaName))
+                {
+                    continue;
+                }
 
-            sequences.Add(new SequenceDefinition
-            {
-                SequenceName = sequenceName,
-                SchemaName = schemaName.ToUpper(),
-                CurrentValue = reader.IsDBNull(1) ? null : reader.GetDecimal(1),
-                IncrementBy = reader.IsDBNull(2) ? null : reader.GetInt64(2),
-                MinValue = reader.IsDBNull(3) ? null : reader.GetInt64(3),
-                MaxValue = reader.IsDBNull(4) ? null : reader.GetDecimal(4),
-                IsCycle = reader.GetString(5) == "Y",
-                CacheSize = reader.IsDBNull(6) ? null : Convert.ToInt32(reader.GetValue(6))
-            });
+                sequences.Add(new SequenceDefinition
+                {
+                    SequenceName = sequenceName,
+                    SchemaName = schemaName.ToUpper(),
+                    CurrentValue = reader.IsDBNull(1) ? null : reader.GetDecimal(1),
+                    IncrementBy = reader.IsDBNull(2) ? null : reader.GetInt64(2),
+                    MinValue = reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                    MaxValue = reader.IsDBNull(4) ? null : reader.GetDecimal(4),
+                    IsCycle = reader.GetString(5) == "Y",
+                    CacheSize = reader.IsDBNull(6) ? null : Convert.ToInt32(reader.GetValue(6))
+                });
+            }
+            
+            _logger.Information("✓ Extracted {Count} Oracle sequences from schema {SchemaName}", sequences.Count, schemaName);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Failed to extract Oracle sequences from schema {SchemaName}", schemaName);
+            throw;
         }
         
         return sequences;
@@ -584,55 +646,66 @@ public class OracleSchemaExtractor
     {
         var views = new List<ViewDefinition>();
 
-        using (var connection = _connectionManager.GetConnection(DatabaseType.Oracle))
+        try
         {
-            connection.Open();
-            
-            var query = "SELECT view_name FROM all_views WHERE owner = '{schemaName.ToUpper()}' ORDER BY view_name";
-            using var cmd = new OracleCommand(query, (OracleConnection)connection);
-            
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+            using (var connection = _connectionManager.GetConnection(DatabaseType.Oracle))
             {
-                var viewName = reader.GetString(0);
-                if (_objectFilter.IsObjectIgnored("view", viewName, schemaName))
+                connection.Open();
+                
+                var query = $"SELECT view_name FROM all_views WHERE owner = '{schemaName.ToUpper()}' ORDER BY view_name";
+                using var cmd = new OracleCommand(query, (OracleConnection)connection);
+                
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
                 {
-                    continue;
-                }
+                    var viewName = reader.GetString(0);
+                    if (_objectFilter.IsObjectIgnored("view", viewName, schemaName))
+                    {
+                        continue;
+                    }
 
-                views.Add(new ViewDefinition
-                {
-                    ViewName = viewName,
-                    SchemaName = schemaName.ToUpper(),
-                    IsMaterialized = false
-                });
+                    views.Add(new ViewDefinition
+                    {
+                        ViewName = viewName,
+                        SchemaName = schemaName.ToUpper(),
+                        IsMaterialized = false
+                    });
+                }
             }
+
+            using (var connection = _connectionManager.GetConnection(DatabaseType.Oracle))
+            {
+                connection.Open();
+                
+                var query = $"SELECT mview_name, refresh_method FROM all_mviews WHERE owner = '{schemaName.ToUpper()}' ORDER BY mview_name";
+                using var cmd = new OracleCommand(query, (OracleConnection)connection);
+                
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var viewName = reader.GetString(0);
+                    if (_objectFilter.IsObjectIgnored("materialized_view", viewName, schemaName))
+                    {
+                        continue;
+                    }
+
+                    views.Add(new ViewDefinition
+                    {
+                        ViewName = viewName,
+                        SchemaName = schemaName.ToUpper(),
+                        IsMaterialized = true,
+                        RefreshMethod = reader.IsDBNull(1) ? null : reader.GetString(1)
+                    });
+                }
+            }
+            
+            _logger.Information("✓ Extracted {Count} Oracle views ({MaterializedCount} materialized) from schema {SchemaName}", 
+                views.Count, views.Count(v => v.IsMaterialized), schemaName);
         }
-
-        using (var connection = _connectionManager.GetConnection(DatabaseType.Oracle))
+        catch (Exception ex)
         {
-            connection.Open();
-            
-            var query = "SELECT mview_name, refresh_method FROM all_mviews WHERE owner = '{schemaName.ToUpper()}' ORDER BY mview_name";
-            using var cmd = new OracleCommand(query, (OracleConnection)connection);
-            
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                var viewName = reader.GetString(0);
-                if (_objectFilter.IsObjectIgnored("materialized_view", viewName, schemaName))
-                {
-                    continue;
-                }
-
-                views.Add(new ViewDefinition
-                {
-                    ViewName = viewName,
-                    SchemaName = schemaName.ToUpper(),
-                    IsMaterialized = true,
-                    RefreshMethod = reader.IsDBNull(1) ? null : reader.GetString(1)
-                });
-            }
+            _logger.Error(ex, "Failed to extract Oracle views from schema {SchemaName}", schemaName);
+            throw;
         }
         
         return views;
@@ -642,37 +715,47 @@ public class OracleSchemaExtractor
     {
         var triggers = new List<TriggerDefinition>();
         
-        using var connection = _connectionManager.GetConnection(DatabaseType.Oracle);
-        connection.Open();
-        
-        var query = $@"
-            SELECT trigger_name, table_name, triggering_event, trigger_type, status
-            FROM all_triggers
-            WHERE owner = '{schemaName.ToUpper()}'
-            ORDER BY table_name, trigger_name";
-        
-        using var cmd = new OracleCommand(query, (OracleConnection)connection);
-        
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        try
         {
-            var triggerName = reader.GetString(0);
-            var tableName = reader.GetString(1);
-            if (_objectFilter.IsTableExcluded(tableName, schemaName) ||
-                _objectFilter.IsObjectIgnored("trigger", triggerName, schemaName))
+            using var connection = _connectionManager.GetConnection(DatabaseType.Oracle);
+            connection.Open();
+            
+            var query = $@"
+                SELECT trigger_name, table_name, triggering_event, trigger_type, status
+                FROM all_triggers
+                WHERE owner = '{schemaName.ToUpper()}'
+                ORDER BY table_name, trigger_name";
+            
+            using var cmd = new OracleCommand(query, (OracleConnection)connection);
+            
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
             {
-                continue;
-            }
+                var triggerName = reader.GetString(0);
+                var tableName = reader.GetString(1);
+                if (_objectFilter.IsTableExcluded(tableName, schemaName) ||
+                    _objectFilter.IsObjectIgnored("trigger", triggerName, schemaName))
+                {
+                    continue;
+                }
 
-            triggers.Add(new TriggerDefinition
-            {
-                TriggerName = triggerName,
-                SchemaName = schemaName.ToUpper(),
-                TableName = tableName,
-                TriggerEvent = reader.GetString(2),
-                TriggerTiming = reader.GetString(3),
-                IsEnabled = reader.GetString(4) == "ENABLED"
-            });
+                triggers.Add(new TriggerDefinition
+                {
+                    TriggerName = triggerName,
+                    SchemaName = schemaName.ToUpper(),
+                    TableName = tableName,
+                    TriggerEvent = reader.GetString(2),
+                    TriggerTiming = reader.GetString(3),
+                    IsEnabled = reader.GetString(4) == "ENABLED"
+                });
+            }
+            
+            _logger.Information("✓ Extracted {Count} Oracle triggers from schema {SchemaName}", triggers.Count, schemaName);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Failed to extract Oracle triggers from schema {SchemaName}", schemaName);
+            throw;
         }
         
         return triggers;
@@ -682,39 +765,49 @@ public class OracleSchemaExtractor
     {
         var procedures = new List<ProcedureDefinition>();
         
-        using var connection = _connectionManager.GetConnection(DatabaseType.Oracle);
-        connection.Open();
-        
-        var query = $@"
-            SELECT object_name, object_type
-            FROM all_objects
-            WHERE owner = '{schemaName.ToUpper()}' AND object_type IN ('PROCEDURE', 'FUNCTION', 'PACKAGE')
-            ORDER BY object_name";
-        
-        using var cmd = new OracleCommand(query, (OracleConnection)connection);
-        
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        try
         {
-            var objType = reader.GetString(1);
-            var procedureName = reader.GetString(0);
-            var typeKey = objType == "FUNCTION" ? "function" :
-                          objType == "PACKAGE" ? "package" :
-                          "procedure";
-
-            if (_objectFilter.IsObjectIgnored(typeKey, procedureName, schemaName))
+            using var connection = _connectionManager.GetConnection(DatabaseType.Oracle);
+            connection.Open();
+            
+            var query = $@"
+                SELECT object_name, object_type
+                FROM all_objects
+                WHERE owner = '{schemaName.ToUpper()}' AND object_type IN ('PROCEDURE', 'FUNCTION', 'PACKAGE')
+                ORDER BY object_name";
+            
+            using var cmd = new OracleCommand(query, (OracleConnection)connection);
+            
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
             {
-                continue;
+                var objType = reader.GetString(1);
+                var procedureName = reader.GetString(0);
+                var typeKey = objType == "FUNCTION" ? "function" :
+                              objType == "PACKAGE" ? "package" :
+                              "procedure";
+
+                if (_objectFilter.IsObjectIgnored(typeKey, procedureName, schemaName))
+                {
+                    continue;
+                }
+
+                procedures.Add(new ProcedureDefinition
+                {
+                    ProcedureName = procedureName,
+                    SchemaName = schemaName.ToUpper(),
+                    Type = objType == "FUNCTION" ? ProcedureType.Function : 
+                           objType == "PACKAGE" ? ProcedureType.Package : 
+                           ProcedureType.Procedure
+                });
             }
-
-            procedures.Add(new ProcedureDefinition
-            {
-                ProcedureName = procedureName,
-                SchemaName = schemaName.ToUpper(),
-                Type = objType == "FUNCTION" ? ProcedureType.Function : 
-                       objType == "PACKAGE" ? ProcedureType.Package : 
-                       ProcedureType.Procedure
-            });
+            
+            _logger.Information("✓ Extracted {Count} Oracle procedures/functions/packages from schema {SchemaName}", procedures.Count, schemaName);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Failed to extract Oracle procedures from schema {SchemaName}", schemaName);
+            throw;
         }
         
         return procedures;

@@ -19,6 +19,8 @@ public class SchemaComparator
             PostgresSchema = postgresSchema
         };
 
+        result.OracleExtractionErrors.AddRange(oracleSchema.ExtractionErrors);
+
         var postgresSummary = PartitionNormalization.BuildPostgresSummary(result.PostgresSchema);
 
         CompareTables(result, postgresSummary);
@@ -97,12 +99,27 @@ public class SchemaComparator
             .Where(c => logicalTableSet.Contains(c.TableName.ToUpperInvariant()))
             .ToList();
 
-        result.OracleLogicalPrimaryKeyCount = oraclePKs.Count;
-        result.PostgresLogicalPrimaryKeyCount = postgresPKs.Count;
+        // Identify synthetic PKs (rowid) added by DMS
+        var syntheticPKs = postgresPKs
+            .Where(pk => pk.Columns.Count == 1 && 
+                        pk.Columns[0].Equals("rowid", StringComparison.OrdinalIgnoreCase))
+            .ToList();
         
-        if (oraclePKs.Count != postgresPKs.Count)
+        result.SyntheticPrimaryKeyCount = syntheticPKs.Count;
+        
+        foreach (var syntheticPK in syntheticPKs)
         {
-            result.ConstraintIssues.Add($"Primary key count mismatch: Oracle={oraclePKs.Count}, PostgreSQL={postgresPKs.Count}");
+            result.ConstraintIssues.Add($"\u26A0\uFE0F Table '{syntheticPK.TableName}' has synthetic primary key 'rowid' (added by DMS)");
+        }
+
+        var postgresPKsExcludingSynthetic = postgresPKs.Except(syntheticPKs).ToList();
+
+        result.OracleLogicalPrimaryKeyCount = oraclePKs.Count;
+        result.PostgresLogicalPrimaryKeyCount = postgresPKsExcludingSynthetic.Count;
+        
+        if (oraclePKs.Count != postgresPKsExcludingSynthetic.Count)
+        {
+            result.ConstraintIssues.Add($"Primary key count mismatch: Oracle={oraclePKs.Count}, PostgreSQL={postgresPKsExcludingSynthetic.Count} (excluding {syntheticPKs.Count} synthetic)");
         }
 
         var oracleFKs = result.OracleSchema.Constraints.Where(c => c.Type == ConstraintType.ForeignKey).ToList();
@@ -224,6 +241,7 @@ public class ComparisonResult
     public int PostgresLogicalColumnCount { get; set; }
     public int OracleLogicalPrimaryKeyCount { get; set; }
     public int PostgresLogicalPrimaryKeyCount { get; set; }
+    public int SyntheticPrimaryKeyCount { get; set; }
     public int OracleLogicalForeignKeyCount { get; set; }
     public int PostgresLogicalForeignKeyCount { get; set; }
     public int OracleLogicalUniqueConstraintCount { get; set; }
@@ -240,6 +258,9 @@ public class ComparisonResult
     public List<string> ConstraintIssues { get; set; } = new();
     public List<string> IndexIssues { get; set; } = new();
     public List<string> CodeObjectIssues { get; set; } = new();
+    
+    public List<string> OracleExtractionErrors { get; set; } = new();
+    public bool HasOracleExtractionErrors => OracleExtractionErrors.Any();
     
     public int TotalIssues => TableIssues.Count + ConstraintIssues.Count + IndexIssues.Count + CodeObjectIssues.Count;
     

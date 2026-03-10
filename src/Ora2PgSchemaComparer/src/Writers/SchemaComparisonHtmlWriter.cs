@@ -36,22 +36,22 @@ public class SchemaComparisonHtmlWriter : BaseHtmlReportWriter
         var summaryMetrics = new List<SummaryMetric>
         {
             new("Total Issues", result.TotalIssues.ToString(), 
-                result.TotalIssues == 0 ? "✅" : "❌",
+                result.TotalIssues == 0 ? "\u2705" : "\u274C",  // ✅ : ❌
                 result.TotalIssues == 0 ? "match" : "mismatch"),
             new("Critical Issues", (result.HasCriticalIssues ? "Yes" : "No"), 
-                result.HasCriticalIssues ? "🔴" : "✅",
+                result.HasCriticalIssues ? "\U0001F534" : "\u2705",  // 🔴 : ✅
                 result.HasCriticalIssues ? "mismatch" : "match"),
             new("Table Issues", result.TableIssues.Count.ToString(), 
-                result.TableIssues.Count == 0 ? "✅" : "⚠️",
+                result.TableIssues.Count == 0 ? "\u2705" : "\u26A0\uFE0F",  // ✅ : ⚠️
                 result.TableIssues.Count == 0 ? "match" : "warning"),
             new("Constraint Issues", result.ConstraintIssues.Count.ToString(), 
-                result.ConstraintIssues.Count == 0 ? "✅" : "⚠️",
+                result.ConstraintIssues.Count == 0 ? "\u2705" : "\u26A0\uFE0F",  // ✅ : ⚠️
                 result.ConstraintIssues.Count == 0 ? "match" : "warning"),
             new("Index Issues", result.IndexIssues.Count.ToString(), 
-                result.IndexIssues.Count == 0 ? "✅" : "⚠️",
+                result.IndexIssues.Count == 0 ? "\u2705" : "\u26A0\uFE0F",  // ✅ : ⚠️
                 result.IndexIssues.Count == 0 ? "match" : "warning"),
             new("Code Object Issues", result.CodeObjectIssues.Count.ToString(), 
-                result.CodeObjectIssues.Count == 0 ? "✅" : "⚠️",
+                result.CodeObjectIssues.Count == 0 ? "\u2705" : "\u26A0\uFE0F",  // ✅ : ⚠️
                 result.CodeObjectIssues.Count == 0 ? "match" : "warning")
         };
         sb.Append(GenerateSummaryTable(summaryMetrics));
@@ -68,6 +68,17 @@ public class SchemaComparisonHtmlWriter : BaseHtmlReportWriter
         AddComparisonRow(sb, "Tables", result.OracleLogicalTableCount, result.PostgresLogicalTableCount);
         AddComparisonRow(sb, "Columns", result.OracleLogicalColumnCount, result.PostgresLogicalColumnCount);
         AddComparisonRow(sb, "Primary Keys", result.OracleLogicalPrimaryKeyCount, result.PostgresLogicalPrimaryKeyCount);
+        
+        if (result.SyntheticPrimaryKeyCount > 0)
+        {
+            sb.AppendLine("            <tr class=\"warning\">");
+            sb.AppendLine("                <td>Synthetic PKs (DMS rowid)</td>");
+            sb.AppendLine("                <td class=\"number\">0</td>");
+            sb.AppendLine($"                <td class=\"number\">{result.SyntheticPrimaryKeyCount}</td>");
+            sb.AppendLine($"                <td class=\"number\">+{result.SyntheticPrimaryKeyCount}</td>");
+            sb.AppendLine("            </tr>");
+        }
+        
         AddComparisonRow(sb, "Foreign Keys", result.OracleLogicalForeignKeyCount, result.PostgresLogicalForeignKeyCount);
         AddComparisonRow(sb, "Unique Constraints", result.OracleLogicalUniqueConstraintCount, result.PostgresLogicalUniqueConstraintCount);
         AddComparisonRow(sb, "Check Constraints", result.OracleLogicalCheckConstraintCount, result.PostgresLogicalCheckConstraintCount);
@@ -106,9 +117,48 @@ public class SchemaComparisonHtmlWriter : BaseHtmlReportWriter
         else
         {
             sb.AppendLine("        <div class=\"detail-box\">");
-            sb.AppendLine("            <p style=\"color: #28a745; font-size: 1.1em;\">✅ <strong>Perfect Match!</strong> All schema components match between Oracle and PostgreSQL.</p>");
+            sb.AppendLine("            <p style=\"color: #28a745; font-size: 1.1em;\">\u2705 <strong>Perfect Match!</strong> All schema components match between Oracle and PostgreSQL.</p>");
             sb.AppendLine("        </div>");
         }
+
+        bool hasZeroCounts = result.OracleSchema.SequenceCount == 0 || result.OracleSchema.TriggerCount == 0 ||
+                             result.OracleSchema.ProcedureCount == 0 || result.OracleSchema.FunctionCount == 0;
+        
+        if (result.HasOracleExtractionErrors)
+        {
+            sb.AppendLine("        <div class=\"detail-box\" style=\"border-left-color: #dc3545; margin-top: 30px;\">");
+            sb.AppendLine("            <h3 style=\"color: #721c24; margin-top: 0;\">\u26A0\uFE0F Warning: Oracle Code Objects Extraction Errors</h3>");
+            sb.AppendLine("            <p>The following errors occurred while extracting Oracle code objects:</p>");
+            sb.AppendLine("            <ul>");
+            foreach (var error in result.OracleExtractionErrors)
+            {
+                sb.AppendLine($"                <li><code>{System.Web.HttpUtility.HtmlEncode(error)}</code></li>");
+            }
+            sb.AppendLine("            </ul>");
+            sb.AppendLine("            <p>These errors may occur due to:</p>");
+            sb.AppendLine("            <ul>");
+            sb.AppendLine("                <li><strong>User Permissions:</strong> The database user may lack SELECT privileges on system views (<code>all_sequences</code>, <code>all_triggers</code>, <code>all_objects</code>).</li>");
+            sb.AppendLine("                <li><strong>Schema Scope:</strong> Objects may exist in different schemas or be owned by system accounts.</li>");
+            sb.AppendLine("                <li><strong>Database Configuration:</strong> Certain Oracle configurations or versions may restrict metadata access.</li>");
+            sb.AppendLine("            </ul>");
+            sb.AppendLine("            <p><em>Check application logs for detailed information and verify database permissions.</em></p>");
+            sb.AppendLine("        </div>");
+        }
+        else if (hasZeroCounts)
+        {
+            sb.AppendLine("        <div class=\"detail-box\" style=\"border-left-color: #17a2b8; margin-top: 30px;\">");
+            sb.AppendLine("            <h3 style=\"color: #17a2b8; margin-top: 0;\">\u2139\uFE0F Note: Oracle Code Objects Count</h3>");
+            sb.AppendLine("            <p>Oracle shows 0 for some code objects (sequences, triggers, procedures/functions). This may be expected if:</p>");
+            sb.AppendLine("            <ul>");
+            sb.AppendLine("                <li><strong>No Objects Exist:</strong> The schema genuinely has no sequences, triggers, or stored procedures.</li>");
+            sb.AppendLine("                <li><strong>User Permissions:</strong> The database user may lack SELECT privileges on system views (<code>all_sequences</code>, <code>all_triggers</code>, <code>all_objects</code>), causing queries to return 0 rows instead of failing.</li>");
+            sb.AppendLine("                <li><strong>Schema Scope:</strong> Objects may exist in different schemas or be owned by system accounts.</li>");
+            sb.AppendLine("                <li><strong>Database Configuration:</strong> Certain Oracle configurations or versions may restrict metadata access.</li>");
+            sb.AppendLine("            </ul>");
+            sb.AppendLine("            <p><em>If this is unexpected, check application logs and verify database permissions.</em></p>");
+            sb.AppendLine("        </div>");
+        }
+
 
         sb.Append(GenerateHtmlFooter());
         

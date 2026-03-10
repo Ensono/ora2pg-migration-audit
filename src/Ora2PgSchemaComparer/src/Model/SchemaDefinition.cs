@@ -13,6 +13,8 @@ public class SchemaDefinition
     public List<ViewDefinition> Views { get; set; } = new();
     public List<TriggerDefinition> Triggers { get; set; } = new();
     public List<ProcedureDefinition> Procedures { get; set; } = new();
+    
+    public List<string> ExtractionErrors { get; set; } = new();
 
     public int TableCount => Tables.Count;
     public int ColumnCount => Tables.Sum(t => t.Columns.Count);

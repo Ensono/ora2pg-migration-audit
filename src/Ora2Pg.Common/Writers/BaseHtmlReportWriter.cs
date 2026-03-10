@@ -22,6 +22,8 @@ public abstract class BaseHtmlReportWriter
         th { background-color: #4CAF50; color: white; padding: 12px; text-align: left; font-weight: bold; }
         td { padding: 10px; border-bottom: 1px solid #ddd; }
         tr:hover { background-color: #f5f5f5; }
+        tr.warning { background-color: #fff3cd; }
+        tr.warning td { color: #000; }
         .match { color: #28a745; }
         .mismatch { color: #dc3545; font-weight: bold; }
         .warning { color: #ffc107; }
