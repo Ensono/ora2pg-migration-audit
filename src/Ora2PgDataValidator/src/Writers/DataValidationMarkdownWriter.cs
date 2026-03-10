@@ -48,15 +48,15 @@ public class DataValidationMarkdownWriter
         sb.AppendLine();
         sb.AppendLine("| Metric | Value |");
         sb.AppendLine("|--------|-------|");
-        sb.AppendLine($"| 📊 Total Objects | {totalObjects} |");
-        sb.AppendLine($"| 📋 Tables | {totalTables} |");
-        sb.AppendLine($"| 🔍 Views | {totalViews} |");
-        sb.AppendLine($"| ✅ Successful Matches | {successfulMatches} |");
-        sb.AppendLine($"| ⚠️ Mismatches | {failedMatches} |");
-        sb.AppendLine($"| 🔴 Errors | {errors} |");
-        sb.AppendLine($"| 📈 Total Source Rows | {totalSourceRows:N0} |");
-        sb.AppendLine($"| 📉 Total Target Rows | {totalTargetRows:N0} |");
-        sb.AppendLine($"| ✔️ Matching Rows | {totalMatchingRows:N0} |");
+        sb.AppendLine($"| \U0001F4CA Total Objects | {totalObjects} |");  // 📊
+        sb.AppendLine($"| \U0001F4CB Tables | {totalTables} |");  // 📋
+        sb.AppendLine($"| \U0001F50D Views | {totalViews} |");  // 🔍
+        sb.AppendLine($"| \u2705 Successful Matches | {successfulMatches} |");  // ✅
+        sb.AppendLine($"| \u26A0\uFE0F Mismatches | {failedMatches} |");  // ⚠️
+        sb.AppendLine($"| \U0001F534 Errors | {errors} |");  // 🔴
+        sb.AppendLine($"| \U0001F4C8 Total Source Rows | {totalSourceRows:N0} |");  // 📈
+        sb.AppendLine($"| \U0001F4C9 Total Target Rows | {totalTargetRows:N0} |");  // 📉
+        sb.AppendLine($"| \u2714\uFE0F Matching Rows | {totalMatchingRows:N0} |");  // ✔️
         sb.AppendLine();
 
         sb.AppendLine("## Detailed Comparison Results");
@@ -66,9 +66,9 @@ public class DataValidationMarkdownWriter
 
         foreach (var result in results.OrderBy(r => r.IsMatch ? 0 : 1).ThenBy(r => r.SourceTable))
         {
-            var tableStatusIcon = result.HasError ? "🔴" : result.IsMatch ? "✅" : "⚠️";
+            var tableStatusIcon = result.HasError ? "\U0001F534" : result.IsMatch ? "\u2705" : "\u26A0\uFE0F";  // 🔴 : ✅ : ⚠️
             var objectType = result.ObjectType == DatabaseObjectType.View ? "View" : "Table";
-            var objectIcon = result.ObjectType == DatabaseObjectType.View ? "🔍" : "📋";
+            var objectIcon = result.ObjectType == DatabaseObjectType.View ? "\U0001F50D" : "\U0001F4CB";  // 🔍 vs 📋
 
             var matchPercentage = result.MatchPercentage;
 

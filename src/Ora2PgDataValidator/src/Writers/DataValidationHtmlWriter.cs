@@ -51,29 +51,29 @@ public class DataValidationHtmlWriter : BaseHtmlReportWriter
 
         var summaryMetrics = new List<SummaryMetric>
         {
-            new("Total Objects", totalObjects.ToString(), "📊", null),
-            new("Tables", totalTables.ToString(), "📋", null),
-            new("Views", totalViews.ToString(), "\U0001F50D", null),  // 🔍 magnifying glass (Unicode)
+            new("Total Objects", totalObjects.ToString(), "\U0001F4CA", null),  // 📊
+            new("Tables", totalTables.ToString(), "\U0001F4CB", null),  // 📋
+            new("Views", totalViews.ToString(), "\U0001F50D", null),  // 🔍
             new("Successful Matches", successfulObjects.ToString(), 
-                successfulObjects == totalObjects ? "✅" : "🔴",
+                successfulObjects == totalObjects ? "\u2705" : "\U0001F534",  // ✅ : 🔴
                 successfulObjects == totalObjects ? "match" : "mismatch"),
             new("Failed Validations", failedObjects.ToString(), 
-                failedObjects == 0 ? "✅" : "❌",
+                failedObjects == 0 ? "\u2705" : "\u274C",  // ✅ : ❌
                 failedObjects == 0 ? "match" : "mismatch"),
             new("Errors", errorObjects.ToString(), 
-                errorObjects == 0 ? "✅" : "🔴",
+                errorObjects == 0 ? "\u2705" : "\U0001F534",  // ✅ : 🔴
                 errorObjects == 0 ? "match" : "mismatch"),
-            new("Total Source Rows", FormatNumber(totalSourceRows), "📈", null),
-            new("Total Target Rows", FormatNumber(totalTargetRows), "📊", null),
-            new("Matching Rows", FormatNumber(totalMatchingRows), "✅", "match"),
+            new("Total Source Rows", FormatNumber(totalSourceRows), "\U0001F4C8", null),  // 📈
+            new("Total Target Rows", FormatNumber(totalTargetRows), "\U0001F4CA", null),  // 📊
+            new("Matching Rows", FormatNumber(totalMatchingRows), "\u2705", "match"),  // ✅
             new("Mismatched Rows", FormatNumber(totalMismatchedRows), 
-                totalMismatchedRows == 0 ? "✅" : "❌",
+                totalMismatchedRows == 0 ? "\u2705" : "\u274C",  // ✅ : ❌
                 totalMismatchedRows == 0 ? "match" : "mismatch"),
             new("Missing in Target", FormatNumber(totalMissingRows), 
-                totalMissingRows == 0 ? "✅" : "⚠️",
+                totalMissingRows == 0 ? "\u2705" : "\u26A0\uFE0F",  // ✅ : ⚠️
                 totalMissingRows == 0 ? "match" : "warning"),
             new("Extra in Target", FormatNumber(totalExtraRows), 
-                totalExtraRows == 0 ? "✅" : "⚠️",
+                totalExtraRows == 0 ? "\u2705" : "\u26A0\uFE0F",  // ✅ : ⚠️
                 totalExtraRows == 0 ? "match" : "warning")
         };
         sb.Append(GenerateSummaryTable(summaryMetrics));
@@ -106,7 +106,7 @@ public class DataValidationHtmlWriter : BaseHtmlReportWriter
                             result.IsMatch ? "Match" : "Mismatch";
             
             var objectType = result.ObjectType == DatabaseObjectType.View ? "View" : "Table";
-            var objectIcon = result.ObjectType == DatabaseObjectType.View ? "\U0001F50D" : "📋";  // 🔍 vs 📋
+            var objectIcon = result.ObjectType == DatabaseObjectType.View ? "\U0001F50D" : "\U0001F4CB";  // 🔍 vs 📋
             
             sb.AppendLine($"            <tr class=\"{rowClass}\">");
             sb.AppendLine($"                <td>{statusIcon} {statusText}</td>");

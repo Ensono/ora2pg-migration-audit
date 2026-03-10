@@ -35,10 +35,10 @@ public class ValidationReportWriter
         sb.AppendLine("|--------|-------|");
         sb.AppendLine($"| **Overall Status** | **{GetStatusEmoji(result.OverallStatus)} {result.OverallStatus}** |");
         sb.AppendLine($"| Total Tables Validated | {result.TotalTablesValidated} |");
-        sb.AppendLine($"| ✅ Tables with Matching Counts | {result.TablesWithMatchingCounts} |");
-        sb.AppendLine($"| ❌ Tables with Mismatched Counts | {result.TablesWithMismatchedCounts} |");
-        sb.AppendLine($"| ⚠️ Tables Only in Oracle | {result.TablesOnlyInOracle} |");
-        sb.AppendLine($"| ℹ️ Tables Only in PostgreSQL | {result.TablesOnlyInPostgres} |");
+        sb.AppendLine($"| \u2705 Tables with Matching Counts | {result.TablesWithMatchingCounts} |");  // ✅
+        sb.AppendLine($"| \u274C Tables with Mismatched Counts | {result.TablesWithMismatchedCounts} |");  // ❌
+        sb.AppendLine($"| \u26A0\uFE0F Tables Only in Oracle | {result.TablesOnlyInOracle} |");  // ⚠️
+        sb.AppendLine($"| \u2139\uFE0F Tables Only in PostgreSQL | {result.TablesOnlyInPostgres} |");  // ℹ️
         sb.AppendLine($"| **Total Oracle Rows** | **{result.TotalOracleRows:N0}** |");
         sb.AppendLine($"| **Total PostgreSQL Rows** | **{result.TotalPostgresRows:N0}** |");
         sb.AppendLine($"| **Row Difference** | **{Math.Abs(result.TotalPostgresRows - result.TotalOracleRows):N0}** |");
@@ -46,10 +46,10 @@ public class ValidationReportWriter
 
         if (result.Issues.Any())
         {
-            WriteSeveritySection(sb, result, ValidationSeverity.Critical, "❌ Critical Issues");
-            WriteSeveritySection(sb, result, ValidationSeverity.Error, "🔴 Errors");
-            WriteSeveritySection(sb, result, ValidationSeverity.Warning, "⚠️ Warnings");
-            WriteSeveritySection(sb, result, ValidationSeverity.Info, "ℹ️ Tables with Matching Counts");
+            WriteSeveritySection(sb, result, ValidationSeverity.Critical, "\u274C Critical Issues");  // ❌
+            WriteSeveritySection(sb, result, ValidationSeverity.Error, "\U0001F534 Errors");  // 🔴
+            WriteSeveritySection(sb, result, ValidationSeverity.Warning, "\u26A0\uFE0F Warnings");  // ⚠️
+            WriteSeveritySection(sb, result, ValidationSeverity.Info, "\u2139\uFE0F Tables with Matching Counts");  // ℹ️
         }
 
         WriteIssueTypeSummary(sb, result);
@@ -148,7 +148,7 @@ public class ValidationReportWriter
             {
                 if (issue.MissingInPostgres.Any())
                 {
-                    sb.AppendLine($"**❌ Missing in PostgreSQL ({issue.MissingInPostgres.Count} sample rows):**");
+                    sb.AppendLine($"**\u274C Missing in PostgreSQL ({issue.MissingInPostgres.Count} sample rows):**");  // ❌
                     sb.AppendLine();
                     sb.AppendLine("| Primary Key Values |");
                     sb.AppendLine("|--------------------|");
@@ -161,7 +161,7 @@ public class ValidationReportWriter
 
                 if (issue.ExtraInPostgres.Any())
                 {
-                    sb.AppendLine($"**➕ Extra in PostgreSQL ({issue.ExtraInPostgres.Count} sample rows):**");
+                    sb.AppendLine($"**\u2795 Extra in PostgreSQL ({issue.ExtraInPostgres.Count} sample rows):**");  // ➕
                     sb.AppendLine();
                     sb.AppendLine("| Primary Key Values |");
                     sb.AppendLine("|--------------------|");
@@ -174,7 +174,7 @@ public class ValidationReportWriter
             }
             else if (!string.IsNullOrEmpty(issue.DetailedComparisonSkippedReason))
             {
-                sb.AppendLine($"**ℹ️ Detailed Row Comparison:** {issue.DetailedComparisonSkippedReason}");
+                sb.AppendLine($"**\u2139\uFE0F Detailed Row Comparison:** {issue.DetailedComparisonSkippedReason}");  // ℹ️
                 sb.AppendLine();
             }
 
@@ -355,9 +355,9 @@ public class ValidationReportWriter
 
     private string GetStatusEmoji(string status) => status switch
     {
-        "PASSED" => "✅",
-        "WARNING" => "⚠️",
-        "FAILED" => "❌",
-        _ => "❓"
+        "PASSED" => "\u2705",  // ✅
+        "WARNING" => "\u26A0\uFE0F",  // ⚠️
+        "FAILED" => "\u274C",  // ❌
+        _ => "\u2753"  // ❓
     };
 }

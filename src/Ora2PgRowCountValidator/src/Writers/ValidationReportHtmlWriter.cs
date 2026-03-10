@@ -65,23 +65,23 @@ public class ValidationReportHtmlWriter : BaseHtmlReportWriter
             sb.AppendLine("            <tr>");
             sb.AppendLine("                <th>Table Name</th>");
             sb.AppendLine("                <th>Severity</th>");
-            sb.AppendLine("                <th>Issue Type</th>");
+            sb.AppendLine("                <th>Status</th>");
             sb.AppendLine("                <th style=\"text-align: right;\">Oracle Rows</th>");
             sb.AppendLine("                <th style=\"text-align: right;\">PostgreSQL Rows</th>");
             sb.AppendLine("                <th style=\"text-align: right;\">Difference</th>");
             sb.AppendLine("                <th>Details</th>");
             sb.AppendLine("            </tr>");
             
-            var issuesToShow = result.Issues.Take(50).ToList();
+            var issuesToShow = result.Issues.ToList();
             
             foreach (var issue in issuesToShow)
             {
                 var severityIcon = issue.Severity switch
                 {
-                    ValidationSeverity.Critical => "🔴",
-                    ValidationSeverity.Error => "❌",
-                    ValidationSeverity.Warning => "⚠️",
-                    _ => "ℹ️"
+                    ValidationSeverity.Critical => "\U0001F534",  // 🔴
+                    ValidationSeverity.Error => "\u274C",  // ❌
+                    ValidationSeverity.Warning => "\u26A0\uFE0F",  // ⚠️
+                    _ => "\u2139\uFE0F"  // ℹ️
                 };
                 
                 var rowClass = issue.Severity switch
@@ -93,7 +93,7 @@ public class ValidationReportHtmlWriter : BaseHtmlReportWriter
                 };
                 
                 var diff = issue.PostgresRowCount - issue.OracleRowCount;
-                var diffDisplay = diff == 0 ? "✅ 0" : $"❌ {diff:+#;-#;0}";
+                var diffDisplay = diff == 0 ? "\u2705 0" : $"\u274C {diff:+#;-#;0}";  // ✅ : ❌
                 
                 sb.AppendLine($"            <tr class=\"{rowClass}\">");
                 sb.AppendLine($"                <td><strong>{EscapeHtml(issue.TableName)}</strong></td>");
@@ -166,11 +166,6 @@ public class ValidationReportHtmlWriter : BaseHtmlReportWriter
             }
             
             sb.AppendLine("        </table>");
-            
-            if (result.Issues.Count > 50)
-            {
-                sb.AppendLine($"        <p><em>... and {result.Issues.Count - 50} more issues</em></p>");
-            }
         }
         
         sb.Append(GenerateHtmlFooter());
