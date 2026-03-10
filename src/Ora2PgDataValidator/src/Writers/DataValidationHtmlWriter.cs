@@ -53,7 +53,7 @@ public class DataValidationHtmlWriter : BaseHtmlReportWriter
         {
             new("Total Objects", totalObjects.ToString(), "📊", null),
             new("Tables", totalTables.ToString(), "📋", null),
-            new("Views", totalViews.ToString(), "🔎", null),
+            new("Views", totalViews.ToString(), "\U0001F50D", null),  // 🔍 magnifying glass (Unicode)
             new("Successful Matches", successfulObjects.ToString(), 
                 successfulObjects == totalObjects ? "✅" : "🔴",
                 successfulObjects == totalObjects ? "match" : "mismatch"),
@@ -106,7 +106,7 @@ public class DataValidationHtmlWriter : BaseHtmlReportWriter
                             result.IsMatch ? "Match" : "Mismatch";
             
             var objectType = result.ObjectType == DatabaseObjectType.View ? "View" : "Table";
-            var objectIcon = result.ObjectType == DatabaseObjectType.View ? "�" : "📋";
+            var objectIcon = result.ObjectType == DatabaseObjectType.View ? "\U0001F50D" : "📋";  // 🔍 vs 📋
             
             sb.AppendLine($"            <tr class=\"{rowClass}\">");
             sb.AppendLine($"                <td>{statusIcon} {statusText}</td>");

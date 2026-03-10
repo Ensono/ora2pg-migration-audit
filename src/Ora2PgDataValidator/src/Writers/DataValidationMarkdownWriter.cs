@@ -50,7 +50,7 @@ public class DataValidationMarkdownWriter
         sb.AppendLine("|--------|-------|");
         sb.AppendLine($"| 📊 Total Objects | {totalObjects} |");
         sb.AppendLine($"| 📋 Tables | {totalTables} |");
-        sb.AppendLine($"| � Views | {totalViews} |");
+        sb.AppendLine($"| 🔍 Views | {totalViews} |");
         sb.AppendLine($"| ✅ Successful Matches | {successfulMatches} |");
         sb.AppendLine($"| ⚠️ Mismatches | {failedMatches} |");
         sb.AppendLine($"| 🔴 Errors | {errors} |");
@@ -68,7 +68,7 @@ public class DataValidationMarkdownWriter
         {
             var tableStatusIcon = result.HasError ? "🔴" : result.IsMatch ? "✅" : "⚠️";
             var objectType = result.ObjectType == DatabaseObjectType.View ? "View" : "Table";
-            var objectIcon = result.ObjectType == DatabaseObjectType.View ? "�" : "📋";
+            var objectIcon = result.ObjectType == DatabaseObjectType.View ? "🔍" : "📋";
 
             var matchPercentage = result.MatchPercentage;
 
