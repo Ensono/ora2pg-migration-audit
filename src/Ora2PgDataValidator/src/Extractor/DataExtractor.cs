@@ -121,9 +121,25 @@ public class DataExtractor
 
         if (primaryKeyColumns.Count == 0 && columns.Count > 0)
         {
-            primaryKeyColumns.AddRange(columns.Select(c => c.Name));
-            Log.Warning("No primary key found for table {TableReference}, will order by all columns for consistency",
-                       tableReference);
+            var idColumns = columns
+                .Where(c => c.Name.EndsWith("_ID", StringComparison.OrdinalIgnoreCase) || 
+                           c.Name.EndsWith("ID", StringComparison.OrdinalIgnoreCase))
+                .Select(c => c.Name)
+                .ToList();
+
+            if (idColumns.Count > 0)
+            {
+                primaryKeyColumns.AddRange(idColumns);
+                Log.Warning("No primary key found for table {TableReference}, will order by ID columns for consistency: {OrderColumns}",
+                           tableReference, string.Join(", ", idColumns));
+            }
+            else
+            {
+                primaryKeyColumns.Add(columns[0].Name);
+                Log.Warning("No primary key or ID columns found for table {TableReference}, will order by first column: {FirstColumn}. " +
+                           "This may cause false positives if rows are not naturally ordered.",
+                           tableReference, columns[0].Name);
+            }
         }
 
         Log.Information("Found {ColumnCount} columns in table {TableReference} (after filtering)", columns.Count, tableReference);

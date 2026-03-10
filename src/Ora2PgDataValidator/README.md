@@ -276,6 +276,21 @@ TABLES_TO_COMPARE=ALL
 ORACLE_SCHEMA=CHINOOK
 POSTGRES_SCHEMA=chinook
 
+# Views to Compare (optional):
+#   ALL - Auto-discover all common views
+#   Comma-separated list - chinook.customer_summary,chinook.sales_report
+#   Leave empty to skip view comparison
+VIEWS_TO_COMPARE=
+
+# View Exclusion Patterns (optional, comma-separated):
+#   Exclude views matching these patterns (e.g., temp_, test_, debug_)
+VIEW_EXCLUSION_PATTERNS=temp_,test_,backup_
+
+# Ignored Objects (comma-separated list):
+#   Use table= or view= prefix to ignore specific objects
+#   Example: table=legacy_data,view=obsolete_summary,view=debug_metrics
+IGNORED_OBJECTS=
+
 # ============================================================================
 # PERFORMANCE SETTINGS
 # ============================================================================
@@ -341,6 +356,67 @@ POSTGRES_SKIP_COLUMNS=created_at,updated_by
 
 # Now both databases will be compared on the same 10 columns
 ```
+
+### View Validation Feature
+
+The validator can now compare **database views** in addition to tables. Views are validated using the same hash-based fingerprinting approach, ensuring view query results match between Oracle and PostgreSQL.
+
+**Configuration:**
+```bash
+# Auto-discover all common views
+VIEWS_TO_COMPARE=ALL
+
+# Or specify views explicitly
+VIEWS_TO_COMPARE=schema.customer_summary,schema.sales_report,schema.monthly_totals
+
+# Exclude views matching patterns
+VIEW_EXCLUSION_PATTERNS=temp_,test_,debug_,backup_
+
+# Ignore specific views
+IGNORED_OBJECTS=view=obsolete_summary,view=deprecated_report
+```
+
+**How It Works:**
+1. The validator discovers views using database metadata:
+   - Oracle: Queries `all_views` system table
+   - PostgreSQL: Queries `information_schema.views`
+2. Views are filtered using exclusion patterns and ignored objects
+3. View data is extracted using `SELECT * FROM schema.view_name`
+4. Hash fingerprints are generated for each row (same as tables)
+5. Hashes are compared to identify mismatches
+
+**Benefits:**
+- ✅ Validate view logic after migration
+- ✅ Ensure aggregations produce same results
+- ✅ Verify joins and calculations match
+- ✅ Reuse existing hash comparison infrastructure
+
+**Example Use Case:**
+```bash
+# Oracle has view: CHINOOK.CUSTOMER_SALES_SUMMARY
+# PostgreSQL has view: chinook.customer_sales_summary
+
+# Configure to auto-discover and compare
+VIEWS_TO_COMPARE=ALL
+VIEW_EXCLUSION_PATTERNS=temp_,debug_
+
+# The validator will:
+# 1. Find matching views between databases
+# 2. Execute SELECT * on both views
+# 3. Generate hashes for each row
+# 4. Report any differences
+```
+
+**View vs Table Validation:**
+- Views use the **same validation approach** as tables
+- Smart ordering applies (PK columns → ID columns → first column)
+- Reports distinguish "Table" vs "View" for clarity
+- View exclusions are independent of table exclusions
+
+**Limitations:**
+- Views must return consistent row order (use ORDER BY in view definition if needed)
+- Materialized views are supported (planned: auto-refresh before comparison)
+- Views with parameters or dynamic SQL are not supported
 
 ---
 
