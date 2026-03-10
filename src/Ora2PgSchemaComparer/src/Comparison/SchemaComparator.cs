@@ -119,7 +119,31 @@ public class SchemaComparator
         
         if (oraclePKs.Count != postgresPKsExcludingSynthetic.Count)
         {
-            result.ConstraintIssues.Add($"Primary key count mismatch: Oracle={oraclePKs.Count}, PostgreSQL={postgresPKsExcludingSynthetic.Count} (excluding {syntheticPKs.Count} synthetic)");
+            var postgresPKTableSet = new HashSet<string>(
+                postgresPKsExcludingSynthetic.Select(pk => pk.TableName), 
+                StringComparer.OrdinalIgnoreCase);
+            
+            var missingPKs = oraclePKs
+                .Where(pk => !postgresPKTableSet.Contains(pk.TableName))
+                .ToList();
+            
+            foreach (var missingPK in missingPKs)
+            {
+                result.ConstraintIssues.Add($"❌ Missing PK: {missingPK.TableName}.{missingPK.ConstraintName}");
+            }
+            
+            var oraclePKTableSet = new HashSet<string>(
+                oraclePKs.Select(pk => pk.TableName), 
+                StringComparer.OrdinalIgnoreCase);
+            
+            var extraPKs = postgresPKsExcludingSynthetic
+                .Where(pk => !oraclePKTableSet.Contains(pk.TableName))
+                .ToList();
+            
+            foreach (var extraPK in extraPKs)
+            {
+                result.ConstraintIssues.Add($"➕ Extra PK in PostgreSQL: {extraPK.TableName}.{extraPK.ConstraintName}");
+            }
         }
 
         var oracleFKs = result.OracleSchema.Constraints.Where(c => c.Type == ConstraintType.ForeignKey).ToList();
@@ -133,7 +157,29 @@ public class SchemaComparator
         
         if (oracleFKs.Count != postgresFKs.Count)
         {
-            result.ConstraintIssues.Add($"Foreign key count mismatch: Oracle={oracleFKs.Count}, PostgreSQL={postgresFKs.Count}");
+            var postgresFKSet = new HashSet<string>(
+                postgresFKs.Select(fk => $"{fk.TableName}→{fk.ReferencedTableName}".ToUpperInvariant()));
+            
+            var missingFKs = oracleFKs
+                .Where(fk => !postgresFKSet.Contains($"{fk.TableName}→{fk.ReferencedTableName}".ToUpperInvariant()))
+                .ToList();
+            
+            foreach (var missingFK in missingFKs)
+            {
+                result.ConstraintIssues.Add($"❌ Missing FK: {missingFK.TableName}.{missingFK.ConstraintName} → {missingFK.ReferencedTableName}");
+            }
+            
+            var oracleFKSet = new HashSet<string>(
+                oracleFKs.Select(fk => $"{fk.TableName}→{fk.ReferencedTableName}".ToUpperInvariant()));
+            
+            var extraFKs = postgresFKs
+                .Where(fk => !oracleFKSet.Contains($"{fk.TableName}→{fk.ReferencedTableName}".ToUpperInvariant()))
+                .ToList();
+            
+            foreach (var extraFK in extraFKs)
+            {
+                result.ConstraintIssues.Add($"➕ Extra FK in PostgreSQL: {extraFK.TableName}.{extraFK.ConstraintName} → {extraFK.ReferencedTableName}");
+            }
         }
 
         foreach (var oracleFK in oracleFKs)
@@ -201,22 +247,117 @@ public class SchemaComparator
     {
         if (result.OracleSchema.SequenceCount != result.PostgresSchema.SequenceCount)
         {
-            result.CodeObjectIssues.Add($"Sequence count mismatch: Oracle={result.OracleSchema.SequenceCount}, PostgreSQL={result.PostgresSchema.SequenceCount}");
+            var oracleSeqNames = new HashSet<string>(
+                result.OracleSchema.Sequences.Select(s => s.SequenceName),
+                StringComparer.OrdinalIgnoreCase);
+            var postgresSeqNames = new HashSet<string>(
+                result.PostgresSchema.Sequences.Select(s => s.SequenceName),
+                StringComparer.OrdinalIgnoreCase);
+            
+            var missingSeqs = result.OracleSchema.Sequences
+                .Where(s => !postgresSeqNames.Contains(s.SequenceName))
+                .ToList();
+            
+            foreach (var seq in missingSeqs)
+            {
+                result.CodeObjectIssues.Add($"❌ Missing Sequence: {seq.SequenceName}");
+            }
+            
+            var extraSeqs = result.PostgresSchema.Sequences
+                .Where(s => !oracleSeqNames.Contains(s.SequenceName))
+                .ToList();
+            
+            foreach (var seq in extraSeqs)
+            {
+                result.CodeObjectIssues.Add($"➕ Extra Sequence in PostgreSQL: {seq.SequenceName}");
+            }
         }
 
         if (result.OracleSchema.ViewCount != result.PostgresSchema.ViewCount)
         {
-            result.CodeObjectIssues.Add($"View count mismatch: Oracle={result.OracleSchema.ViewCount}, PostgreSQL={result.PostgresSchema.ViewCount}");
+            var oracleViewNames = new HashSet<string>(
+                result.OracleSchema.Views.Select(v => v.ViewName),
+                StringComparer.OrdinalIgnoreCase);
+            var postgresViewNames = new HashSet<string>(
+                result.PostgresSchema.Views.Select(v => v.ViewName),
+                StringComparer.OrdinalIgnoreCase);
+            
+            var missingViews = result.OracleSchema.Views
+                .Where(v => !postgresViewNames.Contains(v.ViewName))
+                .ToList();
+            
+            foreach (var view in missingViews)
+            {
+                result.CodeObjectIssues.Add($"❌ Missing View: {view.ViewName}");
+            }
+            
+            var extraViews = result.PostgresSchema.Views
+                .Where(v => !oracleViewNames.Contains(v.ViewName))
+                .ToList();
+            
+            foreach (var view in extraViews)
+            {
+                result.CodeObjectIssues.Add($"➕ Extra View in PostgreSQL: {view.ViewName}");
+            }
         }
 
         if (result.OracleSchema.MaterializedViewCount != result.PostgresSchema.MaterializedViewCount)
         {
-            result.CodeObjectIssues.Add($"Materialized view count mismatch: Oracle={result.OracleSchema.MaterializedViewCount}, PostgreSQL={result.PostgresSchema.MaterializedViewCount}");
+            var oracleMViews = result.OracleSchema.Views.Where(v => v.IsMaterialized).ToList();
+            var postgresMViews = result.PostgresSchema.Views.Where(v => v.IsMaterialized).ToList();
+            
+            var oracleMViewNames = new HashSet<string>(
+                oracleMViews.Select(v => v.ViewName),
+                StringComparer.OrdinalIgnoreCase);
+            var postgresMViewNames = new HashSet<string>(
+                postgresMViews.Select(v => v.ViewName),
+                StringComparer.OrdinalIgnoreCase);
+            
+            var missingMViews = oracleMViews
+                .Where(v => !postgresMViewNames.Contains(v.ViewName))
+                .ToList();
+            
+            foreach (var mview in missingMViews)
+            {
+                result.CodeObjectIssues.Add($"❌ Missing Materialized View: {mview.ViewName}");
+            }
+            
+            var extraMViews = postgresMViews
+                .Where(v => !oracleMViewNames.Contains(v.ViewName))
+                .ToList();
+            
+            foreach (var mview in extraMViews)
+            {
+                result.CodeObjectIssues.Add($"➕ Extra Materialized View in PostgreSQL: {mview.ViewName}");
+            }
         }
 
         if (result.OracleSchema.TriggerCount != result.PostgresSchema.TriggerCount)
         {
-            result.CodeObjectIssues.Add($"Trigger count mismatch: Oracle={result.OracleSchema.TriggerCount}, PostgreSQL={result.PostgresSchema.TriggerCount}");
+            var oracleTriggerNames = new HashSet<string>(
+                result.OracleSchema.Triggers.Select(t => t.TriggerName),
+                StringComparer.OrdinalIgnoreCase);
+            var postgresTriggerNames = new HashSet<string>(
+                result.PostgresSchema.Triggers.Select(t => t.TriggerName),
+                StringComparer.OrdinalIgnoreCase);
+            
+            var missingTriggers = result.OracleSchema.Triggers
+                .Where(t => !postgresTriggerNames.Contains(t.TriggerName))
+                .ToList();
+            
+            foreach (var trigger in missingTriggers)
+            {
+                result.CodeObjectIssues.Add($"❌ Missing Trigger: {trigger.TriggerName} on {trigger.TableName}");
+            }
+            
+            var extraTriggers = result.PostgresSchema.Triggers
+                .Where(t => !oracleTriggerNames.Contains(t.TriggerName))
+                .ToList();
+            
+            foreach (var trigger in extraTriggers)
+            {
+                result.CodeObjectIssues.Add($"➕ Extra Trigger in PostgreSQL: {trigger.TriggerName} on {trigger.TableName}");
+            }
         }
 
         var oracleProcCount = result.OracleSchema.ProcedureCount + result.OracleSchema.FunctionCount;
@@ -224,7 +365,30 @@ public class SchemaComparator
         
         if (oracleProcCount != postgresProcCount)
         {
-            result.CodeObjectIssues.Add($"Procedure/Function count mismatch: Oracle={oracleProcCount}, PostgreSQL={postgresProcCount}");
+            var oracleProcNames = new HashSet<string>(
+                result.OracleSchema.Procedures.Select(p => p.ProcedureName),
+                StringComparer.OrdinalIgnoreCase);
+            var postgresProcNames = new HashSet<string>(
+                result.PostgresSchema.Procedures.Select(p => p.ProcedureName),
+                StringComparer.OrdinalIgnoreCase);
+            
+            var missingProcs = result.OracleSchema.Procedures
+                .Where(p => !postgresProcNames.Contains(p.ProcedureName))
+                .ToList();
+            
+            foreach (var proc in missingProcs)
+            {
+                result.CodeObjectIssues.Add($"❌ Missing {proc.Type}: {proc.ProcedureName}");
+            }
+            
+            var extraProcs = result.PostgresSchema.Procedures
+                .Where(p => !oracleProcNames.Contains(p.ProcedureName))
+                .ToList();
+            
+            foreach (var proc in extraProcs)
+            {
+                result.CodeObjectIssues.Add($"➕ Extra {proc.Type} in PostgreSQL: {proc.ProcedureName}");
+            }
         }
     }
 }

@@ -382,6 +382,8 @@ public class OracleSchemaExtractor
     private List<ConstraintDefinition> ExtractForeignKeys(string schemaName)
     {
         var fks = new List<ConstraintDefinition>();
+        var excludedFKs = new List<string>();
+        int totalFKsFound = 0;
         
         using var connection = _connectionManager.GetConnection(DatabaseType.Oracle);
         connection.Open();
@@ -404,21 +406,33 @@ public class OracleSchemaExtractor
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            totalFKsFound++;
+            var constraintName = reader.GetString(0);
             var tableName = reader.GetString(1);
+            var refSchema = reader.GetString(2);
             var referencedTable = reader.GetString(3);
-            if (_objectFilter.IsTableExcluded(tableName, schemaName) ||
-                _objectFilter.IsTableExcluded(referencedTable, reader.GetString(2)))
+            
+            var tableExcluded = _objectFilter.IsTableExcluded(tableName, schemaName);
+            var refTableExcluded = _objectFilter.IsTableExcluded(referencedTable, refSchema);
+            
+            if (tableExcluded || refTableExcluded)
             {
+                var reason = tableExcluded 
+                    ? $"source table '{tableName}' excluded" 
+                    : $"referenced table '{referencedTable}' excluded";
+                excludedFKs.Add($"{constraintName} ({tableName} → {referencedTable}): {reason}");
+                _logger.Debug("Excluding FK {ConstraintName}: {Table} → {RefTable} ({Reason})", 
+                    constraintName, tableName, referencedTable, reason);
                 continue;
             }
 
             fks.Add(new ConstraintDefinition
             {
-                ConstraintName = reader.GetString(0),
+                ConstraintName = constraintName,
                 SchemaName = schemaName.ToUpper(),
                 TableName = tableName,
                 Type = ConstraintType.ForeignKey,
-                ReferencedSchemaName = reader.GetString(2),
+                ReferencedSchemaName = refSchema,
                 ReferencedTableName = referencedTable,
                 OnDeleteRule = reader.GetString(4),
                 OnUpdateRule = "NO ACTION", // Oracle doesn't have ON UPDATE
@@ -427,6 +441,20 @@ public class OracleSchemaExtractor
                 Columns = reader.GetString(7).Split(',').ToList(),
                 ReferencedColumns = reader.GetString(8).Split(',').ToList()
             });
+        }
+        
+        if (excludedFKs.Count > 0)
+        {
+            _logger.Information("Oracle FK Summary: {Total} total, {Included} included, {Excluded} excluded by filters",
+                totalFKsFound, fks.Count, excludedFKs.Count);
+            foreach (var excluded in excludedFKs)
+            {
+                _logger.Information("  ⊗ Excluded FK: {Details}", excluded);
+            }
+        }
+        else
+        {
+            _logger.Information("Oracle FK Summary: {Total} foreign keys extracted (no exclusions)", totalFKsFound);
         }
         
         return fks;
