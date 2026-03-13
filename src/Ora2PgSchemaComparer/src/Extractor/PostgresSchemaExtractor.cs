@@ -738,7 +738,8 @@ public class PostgresSchemaExtractor
         while (reader.Read())
         {
             var sequenceName = reader.GetString(0);
-            if (_objectFilter.IsObjectIgnored("sequence", sequenceName, schemaName))
+            if (_objectFilter.IsObjectIgnored("sequence", sequenceName, schemaName) ||
+                IsSequenceForExcludedTable(sequenceName, schemaName))
             {
                 continue;
             }
@@ -910,7 +911,8 @@ public class PostgresSchemaExtractor
             var procedureName = reader.GetString(0);
             var typeKey = reader.GetString(1) == "FUNCTION" ? "function" : "procedure";
 
-            if (_objectFilter.IsObjectIgnored(typeKey, procedureName, schemaName))
+            if (_objectFilter.IsObjectIgnored(typeKey, procedureName, schemaName) ||
+                IsProcedureForExcludedObject(procedureName, schemaName))
             {
                 continue;
             }
@@ -925,5 +927,103 @@ public class PostgresSchemaExtractor
         }
         
         return procedures;
+    }
+
+    private bool IsSequenceForExcludedTable(string sequenceName, string schemaName)
+    {
+        var seqNameLower = sequenceName.ToLower();
+        
+        // Remove common suffixes
+        var withoutSeqSuffix = seqNameLower.Replace("_seq", "").Replace("_id", "");
+        
+        // Remove common prefixes
+        var withoutSeqPrefix = seqNameLower.StartsWith("seq_") ? seqNameLower.Substring(4) : seqNameLower;
+        
+        // Check if the base name (without SEQ suffix/prefix) matches an excluded table
+        var potentialTableNames = new[]
+        {
+            withoutSeqSuffix,
+            withoutSeqPrefix,
+            seqNameLower.Replace("_seq", "").Replace("_id_seq", ""), // Handle table_id_seq pattern
+        };
+        
+        foreach (var tableName in potentialTableNames.Distinct())
+        {
+            if (_objectFilter.IsTableExcluded(tableName, schemaName))
+            {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+    private bool IsProcedureForExcludedObject(string procedureName, string schemaName)
+    {
+        var procNameLower = procedureName.ToLower();
+        
+        // Remove common prefixes
+        var withoutProcPrefix = procNameLower.StartsWith("proc_") ? procNameLower.Substring(5) :
+                               procNameLower.StartsWith("sp_") ? procNameLower.Substring(3) :
+                               procNameLower.StartsWith("fn_") ? procNameLower.Substring(3) :
+                               procNameLower;
+        
+        // Remove common suffixes
+        var withoutProcSuffix = procNameLower.Replace("_proc", "")
+                                            .Replace("_sp", "")
+                                            .Replace("_fn", "")
+                                            .Replace("_insert", "")
+                                            .Replace("_update", "")
+                                            .Replace("_delete", "")
+                                            .Replace("_select", "")
+                                            .Replace("_get", "")
+                                            .Replace("_set", "");
+        
+        // Check if the base name matches an excluded table
+        var potentialTableNames = new[]
+        {
+            withoutProcPrefix,
+            withoutProcSuffix,
+            procNameLower.Replace("_proc", "").Replace("_insert", "").Replace("_update", "").Replace("_delete", "")
+        };
+        
+        foreach (var tableName in potentialTableNames.Distinct())
+        {
+            if (string.IsNullOrWhiteSpace(tableName))
+                continue;
+                
+            // Check if table is excluded via patterns
+            if (_objectFilter.IsTableExcluded(tableName, schemaName))
+            {
+                return true;
+            }
+            
+            // Check if table is in IGNORED_OBJECTS
+            if (_objectFilter.IsObjectIgnored("table", tableName, schemaName))
+            {
+                return true;
+            }
+        }
+        
+        // Check if the procedure/function belongs to an ignored package (schema in PostgreSQL)
+        // PostgreSQL uses schemas, but check for package-like naming conventions
+        var potentialPackageNames = new[]
+        {
+            withoutProcPrefix,
+            procNameLower.Split('_')[0] // First part might be package/module name
+        };
+        
+        foreach (var packageName in potentialPackageNames.Distinct())
+        {
+            if (string.IsNullOrWhiteSpace(packageName))
+                continue;
+                
+            if (_objectFilter.IsObjectIgnored("package", packageName, schemaName))
+            {
+                return true;
+            }
+        }
+        
+        return false;
     }
 }

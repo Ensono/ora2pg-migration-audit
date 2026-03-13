@@ -248,8 +248,6 @@ public class SchemaComparator
         // Sequences
         if (result.OracleSchema.SequenceCount != result.PostgresSchema.SequenceCount)
         {
-            result.CodeObjectIssues.Add($"Sequence count mismatch: Oracle={result.OracleSchema.SequenceCount}, PostgreSQL={result.PostgresSchema.SequenceCount}");
-            
             const int maxItemsToShow = 5;
             
             var oracleSeqNames = new HashSet<string>(
@@ -264,26 +262,32 @@ public class SchemaComparator
                 .Select(s => s.SequenceName)
                 .ToList();
             
+            var extraSeqs = result.PostgresSchema.Sequences
+                .Where(s => !oracleSeqNames.Contains(s.SequenceName))
+                .Select(s => s.SequenceName)
+                .ToList();
+            
+            // Build detailed message with missing/extra sequences
+            var detailParts = new List<string>();
+            
             if (missingSeqs.Any())
             {
                 var seqList = string.Join(", ", missingSeqs.Take(maxItemsToShow));
                 var remaining = missingSeqs.Count - maxItemsToShow;
                 var suffix = remaining > 0 ? $" (and {remaining} more)" : "";
-                result.CodeObjectIssues.Add($"  ℹ Missing sequences in PostgreSQL: {seqList}{suffix}");
+                detailParts.Add($"Missing in PostgreSQL: {seqList}{suffix}");
             }
-            
-            var extraSeqs = result.PostgresSchema.Sequences
-                .Where(s => !oracleSeqNames.Contains(s.SequenceName))
-                .Select(s => s.SequenceName)
-                .ToList();
             
             if (extraSeqs.Any())
             {
                 var seqList = string.Join(", ", extraSeqs.Take(maxItemsToShow));
                 var remaining = extraSeqs.Count - maxItemsToShow;
                 var suffix = remaining > 0 ? $" (and {remaining} more)" : "";
-                result.CodeObjectIssues.Add($"  ℹ Extra sequences in PostgreSQL: {seqList}{suffix}");
+                detailParts.Add($"Extra in PostgreSQL: {seqList}{suffix}");
             }
+            
+            var details = detailParts.Any() ? $" | {string.Join(" | ", detailParts)}" : "";
+            result.CodeObjectIssues.Add($"ℹ Sequence count mismatch: Oracle={result.OracleSchema.SequenceCount}, PostgreSQL={result.PostgresSchema.SequenceCount}{details}");
         }
 
         if (result.OracleSchema.ViewCount != result.PostgresSchema.ViewCount)
@@ -301,12 +305,92 @@ public class SchemaComparator
             result.CodeObjectIssues.Add($"Trigger count mismatch: Oracle={result.OracleSchema.TriggerCount}, PostgreSQL={result.PostgresSchema.TriggerCount}");
         }
 
-        var oracleProcCount = result.OracleSchema.ProcedureCount + result.OracleSchema.FunctionCount;
-        var postgresProcCount = result.PostgresSchema.ProcedureCount + result.PostgresSchema.FunctionCount;
-        
-        if (oracleProcCount != postgresProcCount)
+        // Compare Procedures separately
+        if (result.OracleSchema.ProcedureCount != result.PostgresSchema.ProcedureCount)
         {
-            result.CodeObjectIssues.Add($"Procedure/Function count mismatch: Oracle={oracleProcCount}, PostgreSQL={postgresProcCount}");
+            const int maxItemsToShow = 5;
+            
+            var oracleProcNames = new HashSet<string>(
+                result.OracleSchema.Procedures.Where(p => p.Type == ProcedureType.Procedure).Select(p => p.ProcedureName),
+                StringComparer.OrdinalIgnoreCase);
+            var postgresProcNames = new HashSet<string>(
+                result.PostgresSchema.Procedures.Where(p => p.Type == ProcedureType.Procedure).Select(p => p.ProcedureName),
+                StringComparer.OrdinalIgnoreCase);
+            
+            var missingProcs = result.OracleSchema.Procedures
+                .Where(p => p.Type == ProcedureType.Procedure && !postgresProcNames.Contains(p.ProcedureName))
+                .Select(p => p.ProcedureName)
+                .ToList();
+            
+            var extraProcs = result.PostgresSchema.Procedures
+                .Where(p => p.Type == ProcedureType.Procedure && !oracleProcNames.Contains(p.ProcedureName))
+                .Select(p => p.ProcedureName)
+                .ToList();
+            
+            var detailParts = new List<string>();
+            
+            if (missingProcs.Any())
+            {
+                var procList = string.Join(", ", missingProcs.Take(maxItemsToShow));
+                var remaining = missingProcs.Count - maxItemsToShow;
+                var suffix = remaining > 0 ? $" (and {remaining} more)" : "";
+                detailParts.Add($"Missing in PostgreSQL: {procList}{suffix}");
+            }
+            
+            if (extraProcs.Any())
+            {
+                var procList = string.Join(", ", extraProcs.Take(maxItemsToShow));
+                var remaining = extraProcs.Count - maxItemsToShow;
+                var suffix = remaining > 0 ? $" (and {remaining} more)" : "";
+                detailParts.Add($"Extra in PostgreSQL: {procList}{suffix}");
+            }
+            
+            var details = detailParts.Any() ? $" | {string.Join(" | ", detailParts)}" : "";
+            result.CodeObjectIssues.Add($"ℹ Procedure count mismatch: Oracle={result.OracleSchema.ProcedureCount}, PostgreSQL={result.PostgresSchema.ProcedureCount}{details}");
+        }
+
+        // Compare Functions separately
+        if (result.OracleSchema.FunctionCount != result.PostgresSchema.FunctionCount)
+        {
+            const int maxItemsToShow = 5;
+            
+            var oracleFuncNames = new HashSet<string>(
+                result.OracleSchema.Procedures.Where(p => p.Type == ProcedureType.Function).Select(p => p.ProcedureName),
+                StringComparer.OrdinalIgnoreCase);
+            var postgresFuncNames = new HashSet<string>(
+                result.PostgresSchema.Procedures.Where(p => p.Type == ProcedureType.Function).Select(p => p.ProcedureName),
+                StringComparer.OrdinalIgnoreCase);
+            
+            var missingFuncs = result.OracleSchema.Procedures
+                .Where(p => p.Type == ProcedureType.Function && !postgresFuncNames.Contains(p.ProcedureName))
+                .Select(p => p.ProcedureName)
+                .ToList();
+            
+            var extraFuncs = result.PostgresSchema.Procedures
+                .Where(p => p.Type == ProcedureType.Function && !oracleFuncNames.Contains(p.ProcedureName))
+                .Select(p => p.ProcedureName)
+                .ToList();
+            
+            var detailParts = new List<string>();
+            
+            if (missingFuncs.Any())
+            {
+                var funcList = string.Join(", ", missingFuncs.Take(maxItemsToShow));
+                var remaining = missingFuncs.Count - maxItemsToShow;
+                var suffix = remaining > 0 ? $" (and {remaining} more)" : "";
+                detailParts.Add($"Missing in PostgreSQL: {funcList}{suffix}");
+            }
+            
+            if (extraFuncs.Any())
+            {
+                var funcList = string.Join(", ", extraFuncs.Take(maxItemsToShow));
+                var remaining = extraFuncs.Count - maxItemsToShow;
+                var suffix = remaining > 0 ? $" (and {remaining} more)" : "";
+                detailParts.Add($"Extra in PostgreSQL: {funcList}{suffix}");
+            }
+            
+            var details = detailParts.Any() ? $" | {string.Join(" | ", detailParts)}" : "";
+            result.CodeObjectIssues.Add($"ℹ Functions (includes triggers) count mismatch: Oracle={result.OracleSchema.FunctionCount}, PostgreSQL={result.PostgresSchema.FunctionCount}{details}");
         }
     }
 }

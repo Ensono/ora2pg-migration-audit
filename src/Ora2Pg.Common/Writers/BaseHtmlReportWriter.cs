@@ -27,6 +27,7 @@ public abstract class BaseHtmlReportWriter
         .match { color: #28a745; }
         .mismatch { color: #dc3545; font-weight: bold; }
         .warning { color: #ffc107; }
+        .info { color: #17a2b8; }
         .number { text-align: right; font-family: 'Courier New', monospace; }
         .pk-list { margin: 5px 0; padding: 10px; background-color: #fff3cd; border-left: 4px solid #ffc107; }
         .pk-list ul { margin: 5px 0; padding-left: 20px; }
@@ -181,7 +182,8 @@ public abstract class BaseHtmlReportWriter
             "CRITICAL" => "mismatch",
             "ERROR" => "mismatch",
             "WARNING" => "warning",
-            _ => "match"
+            "INFO" => "info",
+            _ => "info"
         };
     }
 }

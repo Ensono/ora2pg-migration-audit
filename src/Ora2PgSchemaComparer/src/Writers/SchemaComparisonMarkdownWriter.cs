@@ -78,7 +78,15 @@ public class SchemaComparisonMarkdownWriter
                 sb.AppendLine();
                 foreach (var issue in result.TableIssues)
                 {
-                    sb.AppendLine($"- {EscapeMarkdown(issue)}");
+                    var severity = GetIssueSeverity(issue);
+                    var badge = severity switch
+                    {
+                        "Critical" => "🔴 **CRITICAL**",
+                        "Warning" => "⚠️ **WARNING**",
+                        "Info" => "ℹ️ **INFO**",
+                        _ => ""
+                    };
+                    sb.AppendLine($"- {badge} {EscapeMarkdown(issue)}");
                 }
                 sb.AppendLine();
             }
@@ -89,7 +97,15 @@ public class SchemaComparisonMarkdownWriter
                 sb.AppendLine();
                 foreach (var issue in result.ConstraintIssues)
                 {
-                    sb.AppendLine($"- {EscapeMarkdown(issue)}");
+                    var severity = GetIssueSeverity(issue);
+                    var badge = severity switch
+                    {
+                        "Critical" => "🔴 **CRITICAL**",
+                        "Warning" => "⚠️ **WARNING**",
+                        "Info" => "ℹ️ **INFO**",
+                        _ => ""
+                    };
+                    sb.AppendLine($"- {badge} {EscapeMarkdown(issue)}");
                 }
                 sb.AppendLine();
             }
@@ -100,7 +116,15 @@ public class SchemaComparisonMarkdownWriter
                 sb.AppendLine();
                 foreach (var issue in result.IndexIssues)
                 {
-                    sb.AppendLine($"- {EscapeMarkdown(issue)}");
+                    var severity = GetIssueSeverity(issue);
+                    var badge = severity switch
+                    {
+                        "Critical" => "🔴 **CRITICAL**",
+                        "Warning" => "⚠️ **WARNING**",
+                        "Info" => "ℹ️ **INFO**",
+                        _ => ""
+                    };
+                    sb.AppendLine($"- {badge} {EscapeMarkdown(issue)}");
                 }
                 sb.AppendLine();
             }
@@ -111,7 +135,15 @@ public class SchemaComparisonMarkdownWriter
                 sb.AppendLine();
                 foreach (var issue in result.CodeObjectIssues)
                 {
-                    sb.AppendLine($"- {EscapeMarkdown(issue)}");
+                    var severity = GetIssueSeverity(issue);
+                    var badge = severity switch
+                    {
+                        "Critical" => "🔴 **CRITICAL**",
+                        "Warning" => "⚠️ **WARNING**",
+                        "Info" => "ℹ️ **INFO**",
+                        _ => ""
+                    };
+                    sb.AppendLine($"- {badge} {EscapeMarkdown(issue)}");
                 }
                 sb.AppendLine();
             }
@@ -163,5 +195,13 @@ public class SchemaComparisonMarkdownWriter
             return text;
 
         return text.Replace("|", "\\|");
+    }
+
+    private string GetIssueSeverity(string issue)
+    {
+        if (issue.Contains("❌")) return "Critical";
+        if (issue.Contains("⚠️")) return "Warning";
+        if (issue.Contains("ℹ️") || issue.Contains("ℹ")) return "Info";
+        return "Info";
     }
 }

@@ -644,7 +644,8 @@ public class OracleSchemaExtractor
                 while (reader.Read())
                 {
                     var sequenceName = reader.GetString(0);
-                    if (_objectFilter.IsObjectIgnored("sequence", sequenceName, schemaName))
+                    if (_objectFilter.IsObjectIgnored("sequence", sequenceName, schemaName) ||
+                        IsSequenceForExcludedTable(sequenceName, schemaName))
                     {
                         continue;
                     }
@@ -682,7 +683,8 @@ public class OracleSchemaExtractor
                 while (reader.Read())
                 {
                     var sequenceName = reader.GetString(0);
-                    if (_objectFilter.IsObjectIgnored("sequence", sequenceName, schemaName))
+                    if (_objectFilter.IsObjectIgnored("sequence", sequenceName, schemaName) ||
+                        IsSequenceForExcludedTable(sequenceName, schemaName))
                     {
                         continue;
                     }
@@ -790,37 +792,79 @@ public class OracleSchemaExtractor
             using var connection = _connectionManager.GetConnection(DatabaseType.Oracle);
             connection.Open();
             
-            var query = $@"
-                SELECT trigger_name, table_name, triggering_event, trigger_type, status
-                FROM all_triggers
-                WHERE owner = '{schemaName.ToUpper()}'
-                ORDER BY table_name, trigger_name";
+            // Try dba_triggers first (requires DBA privileges), fallback to all_triggers
+            string query;
             
-            using var cmd = new OracleCommand(query, (OracleConnection)connection);
-            
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+            try
             {
-                var triggerName = reader.GetString(0);
-                var tableName = reader.GetString(1);
-                if (_objectFilter.IsTableExcluded(tableName, schemaName) ||
-                    _objectFilter.IsObjectIgnored("trigger", triggerName, schemaName))
+                query = $@"
+                    SELECT trigger_name, table_name, triggering_event, trigger_type, status
+                    FROM dba_triggers
+                    WHERE owner = '{schemaName.ToUpper()}'
+                    ORDER BY table_name, trigger_name";
+                
+                using var cmd = new OracleCommand(query, (OracleConnection)connection);
+                using var reader = cmd.ExecuteReader();
+                
+                while (reader.Read())
                 {
-                    continue;
-                }
+                    var triggerName = reader.GetString(0);
+                    var tableName = reader.GetString(1);
+                    if (_objectFilter.IsTableExcluded(tableName, schemaName) ||
+                        _objectFilter.IsObjectIgnored("trigger", triggerName, schemaName))
+                    {
+                        continue;
+                    }
 
-                triggers.Add(new TriggerDefinition
-                {
-                    TriggerName = triggerName,
-                    SchemaName = schemaName.ToUpper(),
-                    TableName = tableName,
-                    TriggerEvent = reader.GetString(2),
-                    TriggerTiming = reader.GetString(3),
-                    IsEnabled = reader.GetString(4) == "ENABLED"
-                });
+                    triggers.Add(new TriggerDefinition
+                    {
+                        TriggerName = triggerName,
+                        SchemaName = schemaName.ToUpper(),
+                        TableName = tableName,
+                        TriggerEvent = reader.GetString(2),
+                        TriggerTiming = reader.GetString(3),
+                        IsEnabled = reader.GetString(4) == "ENABLED"
+                    });
+                }
+                
+                _logger.Information("✓ Extracted {Count} Oracle triggers from schema {SchemaName} (using dba_triggers)", triggers.Count, schemaName);
             }
-            
-            _logger.Information("✓ Extracted {Count} Oracle triggers from schema {SchemaName}", triggers.Count, schemaName);
+            catch (OracleException ex) when (ex.Number == 942) // ORA-00942: table or view does not exist
+            {
+                _logger.Warning("No access to dba_triggers (ORA-00942), falling back to all_triggers");
+                
+                query = $@"
+                    SELECT trigger_name, table_name, triggering_event, trigger_type, status
+                    FROM all_triggers
+                    WHERE owner = '{schemaName.ToUpper()}'
+                    ORDER BY table_name, trigger_name";
+                
+                using var cmd = new OracleCommand(query, (OracleConnection)connection);
+                using var reader = cmd.ExecuteReader();
+                
+                while (reader.Read())
+                {
+                    var triggerName = reader.GetString(0);
+                    var tableName = reader.GetString(1);
+                    if (_objectFilter.IsTableExcluded(tableName, schemaName) ||
+                        _objectFilter.IsObjectIgnored("trigger", triggerName, schemaName))
+                    {
+                        continue;
+                    }
+
+                    triggers.Add(new TriggerDefinition
+                    {
+                        TriggerName = triggerName,
+                        SchemaName = schemaName.ToUpper(),
+                        TableName = tableName,
+                        TriggerEvent = reader.GetString(2),
+                        TriggerTiming = reader.GetString(3),
+                        IsEnabled = reader.GetString(4) == "ENABLED"
+                    });
+                }
+                
+                _logger.Information("✓ Extracted {Count} Oracle triggers from schema {SchemaName} (using all_triggers)", triggers.Count, schemaName);
+            }
         }
         catch (Exception ex)
         {
@@ -840,39 +884,91 @@ public class OracleSchemaExtractor
             using var connection = _connectionManager.GetConnection(DatabaseType.Oracle);
             connection.Open();
             
-            var query = $@"
-                SELECT object_name, object_type
-                FROM all_objects
-                WHERE owner = '{schemaName.ToUpper()}' AND object_type IN ('PROCEDURE', 'FUNCTION', 'PACKAGE')
-                ORDER BY object_name";
-            
-            using var cmd = new OracleCommand(query, (OracleConnection)connection);
-            
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+            // Try dba_objects first (requires DBA privileges), fallback to all_objects
+            try
             {
-                var objType = reader.GetString(1);
-                var procedureName = reader.GetString(0);
-                var typeKey = objType == "FUNCTION" ? "function" :
-                              objType == "PACKAGE" ? "package" :
-                              "procedure";
-
-                if (_objectFilter.IsObjectIgnored(typeKey, procedureName, schemaName))
+                var query = $@"
+                    SELECT object_name, object_type
+                    FROM dba_objects
+                    WHERE owner = '{schemaName.ToUpper()}' 
+                      AND object_type IN ('PROCEDURE', 'FUNCTION', 'TRIGGER')
+                      AND object_name NOT LIKE 'SYS_%'
+                      AND status = 'VALID'
+                    ORDER BY object_name";
+                
+                using var cmd = new OracleCommand(query, (OracleConnection)connection);
+                using var reader = cmd.ExecuteReader();
+                
+                while (reader.Read())
                 {
-                    continue;
+                    var procedureName = reader.GetString(0);
+                    var objType = reader.GetString(1);
+                    
+                    // Map Oracle trigger to function (like PostgreSQL does)
+                    var typeKey = objType == "FUNCTION" ? "function" : 
+                                  objType == "TRIGGER" ? "function" : "procedure";
+                    var procedureType = objType == "FUNCTION" || objType == "TRIGGER" ? 
+                                       ProcedureType.Function : ProcedureType.Procedure;
+
+                    if (_objectFilter.IsObjectIgnored(typeKey, procedureName, schemaName) ||
+                        IsProcedureForExcludedObject(procedureName, schemaName))
+                    {
+                        continue;
+                    }
+
+                    procedures.Add(new ProcedureDefinition
+                    {
+                        ProcedureName = procedureName,
+                        SchemaName = schemaName.ToUpper(),
+                        Type = procedureType
+                    });
                 }
-
-                procedures.Add(new ProcedureDefinition
-                {
-                    ProcedureName = procedureName,
-                    SchemaName = schemaName.ToUpper(),
-                    Type = objType == "FUNCTION" ? ProcedureType.Function : 
-                           objType == "PACKAGE" ? ProcedureType.Package : 
-                           ProcedureType.Procedure
-                });
+                
+                _logger.Information("✓ Extracted {Count} Oracle procedures/functions from schema {SchemaName} (using dba_objects)", procedures.Count, schemaName);
             }
-            
-            _logger.Information("✓ Extracted {Count} Oracle procedures/functions/packages from schema {SchemaName}", procedures.Count, schemaName);
+            catch (OracleException ex) when (ex.Number == 942) // ORA-00942: table or view does not exist
+            {
+                _logger.Warning("No access to dba_objects (ORA-00942), falling back to all_objects");
+                
+                var fallbackQuery = $@"
+                    SELECT object_name, object_type
+                    FROM all_objects
+                    WHERE owner = '{schemaName.ToUpper()}' 
+                      AND object_type IN ('PROCEDURE', 'FUNCTION', 'TRIGGER')
+                      AND object_name NOT LIKE 'SYS_%'
+                      AND status = 'VALID'
+                    ORDER BY object_name";
+                
+                using var cmd = new OracleCommand(fallbackQuery, (OracleConnection)connection);
+                using var reader = cmd.ExecuteReader();
+                
+                while (reader.Read())
+                {
+                    var procedureName = reader.GetString(0);
+                    var objType = reader.GetString(1);
+                    
+                    // Map Oracle trigger to function (like PostgreSQL does)
+                    var typeKey = objType == "FUNCTION" ? "function" : 
+                                  objType == "TRIGGER" ? "function" : "procedure";
+                    var procedureType = objType == "FUNCTION" || objType == "TRIGGER" ? 
+                                       ProcedureType.Function : ProcedureType.Procedure;
+
+                    if (_objectFilter.IsObjectIgnored(typeKey, procedureName, schemaName) ||
+                        IsProcedureForExcludedObject(procedureName, schemaName))
+                    {
+                        continue;
+                    }
+
+                    procedures.Add(new ProcedureDefinition
+                    {
+                        ProcedureName = procedureName,
+                        SchemaName = schemaName.ToUpper(),
+                        Type = procedureType
+                    });
+                }
+                
+                _logger.Information("✓ Extracted {Count} Oracle procedures/functions from schema {SchemaName} (using all_objects)", procedures.Count, schemaName);
+            }
         }
         catch (Exception ex)
         {
@@ -881,5 +977,106 @@ public class OracleSchemaExtractor
         }
         
         return procedures;
+    }
+
+
+    private bool IsSequenceForExcludedTable(string sequenceName, string schemaName)
+    {
+        var seqNameUpper = sequenceName.ToUpper();
+        
+        // Remove common suffixes
+        var withoutSeqSuffix = seqNameUpper.Replace("_SEQ", "").Replace("_ID", "");
+        
+        // Remove common prefixes
+        var withoutSeqPrefix = seqNameUpper.StartsWith("SEQ_") ? seqNameUpper.Substring(4) : seqNameUpper;
+        
+        // Check if the base name (without SEQ suffix/prefix) matches an excluded table
+        var potentialTableNames = new[]
+        {
+            withoutSeqSuffix,
+            withoutSeqPrefix,
+            seqNameUpper.Replace("_SEQ", "").Replace("_ID_SEQ", ""), // Handle TABLE_ID_SEQ pattern
+        };
+        
+        foreach (var tableName in potentialTableNames.Distinct())
+        {
+            if (_objectFilter.IsTableExcluded(tableName, schemaName))
+            {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+
+    private bool IsProcedureForExcludedObject(string procedureName, string schemaName)
+    {
+        var procNameUpper = procedureName.ToUpper();
+        
+        // Remove common prefixes
+        var withoutProcPrefix = procNameUpper.StartsWith("PROC_") ? procNameUpper.Substring(5) :
+                               procNameUpper.StartsWith("SP_") ? procNameUpper.Substring(3) :
+                               procNameUpper.StartsWith("FN_") ? procNameUpper.Substring(3) :
+                               procNameUpper.StartsWith("PKG_") ? procNameUpper.Substring(4) :
+                               procNameUpper;
+        
+        // Remove common suffixes
+        var withoutProcSuffix = procNameUpper.Replace("_PROC", "")
+                                            .Replace("_SP", "")
+                                            .Replace("_FN", "")
+                                            .Replace("_PKG", "")
+                                            .Replace("_INSERT", "")
+                                            .Replace("_UPDATE", "")
+                                            .Replace("_DELETE", "")
+                                            .Replace("_SELECT", "")
+                                            .Replace("_GET", "")
+                                            .Replace("_SET", "");
+        
+        var potentialTableNames = new[]
+        {
+            withoutProcPrefix,
+            withoutProcSuffix,
+            procNameUpper.Replace("_PROC", "").Replace("_INSERT", "").Replace("_UPDATE", "").Replace("_DELETE", "")
+        };
+        
+        foreach (var tableName in potentialTableNames.Distinct())
+        {
+            if (string.IsNullOrWhiteSpace(tableName))
+                continue;
+                
+            // Check if table is excluded via patterns
+            if (_objectFilter.IsTableExcluded(tableName, schemaName))
+            {
+                return true;
+            }
+            
+            // Check if table is in IGNORED_OBJECTS
+            if (_objectFilter.IsObjectIgnored("table", tableName, schemaName))
+            {
+                return true;
+            }
+        }
+        
+        // Check if the procedure/function belongs to an ignored package
+        // Pattern: PKG_NAME.PROCEDURE_NAME or PKG_NAME_PROCEDURE_NAME
+        var potentialPackageNames = new[]
+        {
+            withoutProcPrefix,
+            procNameUpper.Split('_')[0] // First part might be package name
+        };
+        
+        foreach (var packageName in potentialPackageNames.Distinct())
+        {
+            if (string.IsNullOrWhiteSpace(packageName))
+                continue;
+                
+            if (_objectFilter.IsObjectIgnored("package", packageName, schemaName))
+            {
+                return true;
+            }
+        }
+        
+        return false;
     }
 }

@@ -111,7 +111,7 @@ public class SchemaComparisonHtmlWriter : BaseHtmlReportWriter
             if (result.CodeObjectIssues.Any())
             {
                 sb.AppendLine("        <h3>Code Object Issues</h3>");
-                GenerateIssuesTable(sb, result.CodeObjectIssues);
+                GenerateCodeObjectIssuesTable(sb, result.CodeObjectIssues);
             }
         }
         else
@@ -190,5 +190,119 @@ public class SchemaComparisonHtmlWriter : BaseHtmlReportWriter
         }
         
         sb.AppendLine("        </table>");
+    }
+
+    private void GenerateCodeObjectIssuesTable(StringBuilder sb, List<string> issues)
+    {
+        sb.AppendLine("        <table>");
+        sb.AppendLine("            <tr>");
+        sb.AppendLine("                <th>Severity</th>");
+        sb.AppendLine("                <th>Object Type</th>");
+        sb.AppendLine("                <th style=\"text-align: right;\">Oracle</th>");
+        sb.AppendLine("                <th style=\"text-align: right;\">PostgreSQL</th>");
+        sb.AppendLine("                <th>Missing/Extra Objects</th>");
+        sb.AppendLine("            </tr>");
+        
+        foreach (var issue in issues)
+        {
+            var isCritical = issue.Contains("❌");
+            var isWarning = issue.Contains("⚠️");
+            var isInfo = issue.Contains("ℹ️");
+            
+            var severity = isCritical ? "Critical" : isWarning ? "Warning" : "Info";
+            var icon = GetSeverityIcon(severity);
+            
+            // Parse the issue message
+            // Format: "ℹ Sequence count mismatch: Oracle=12, PostgreSQL=15 | Missing in PostgreSQL: seq1, seq2"
+            var objectType = "";
+            var oracleCount = "";
+            var postgresCount = "";
+            var details = "";
+            
+            if (issue.Contains("Sequence count mismatch"))
+            {
+                objectType = "Sequences";
+                ExtractCountsAndDetails(issue, ref oracleCount, ref postgresCount, ref details);
+            }
+            else if (issue.Contains("View count mismatch"))
+            {
+                objectType = "Views";
+                ExtractCountsAndDetails(issue, ref oracleCount, ref postgresCount, ref details);
+            }
+            else if (issue.Contains("Materialized view count mismatch"))
+            {
+                objectType = "Materialized Views";
+                ExtractCountsAndDetails(issue, ref oracleCount, ref postgresCount, ref details);
+            }
+            else if (issue.Contains("Trigger count mismatch"))
+            {
+                objectType = "Triggers";
+                ExtractCountsAndDetails(issue, ref oracleCount, ref postgresCount, ref details);
+            }
+            else if (issue.Contains("Procedure count mismatch"))
+            {
+                objectType = "Procedures";
+                ExtractCountsAndDetails(issue, ref oracleCount, ref postgresCount, ref details);
+            }
+            else if (issue.Contains("Functions (includes triggers) count mismatch"))
+            {
+                objectType = "Functions (includes triggers)";
+                ExtractCountsAndDetails(issue, ref oracleCount, ref postgresCount, ref details);
+            }
+            else if (issue.Contains("Function count mismatch"))
+            {
+                objectType = "Functions";
+                ExtractCountsAndDetails(issue, ref oracleCount, ref postgresCount, ref details);
+            }
+            else
+            {
+                // Fallback for other issues - use original format
+                sb.AppendLine($"            <tr>");
+                sb.AppendLine($"                <td>{icon} {severity}</td>");
+                sb.AppendLine($"                <td colspan=\"4\">{EscapeHtml(issue)}</td>");
+                sb.AppendLine("            </tr>");
+                continue;
+            }
+            
+            sb.AppendLine($"            <tr>");
+            sb.AppendLine($"                <td>{icon} {severity}</td>");
+            sb.AppendLine($"                <td style=\"color: #000;\">{objectType}</td>");
+            sb.AppendLine($"                <td class=\"number\" style=\"color: #000;\">{oracleCount}</td>");
+            sb.AppendLine($"                <td class=\"number\" style=\"color: #000;\">{postgresCount}</td>");
+            sb.AppendLine($"                <td style=\"color: #000; font-size: 0.9em;\">{EscapeHtml(details)}</td>");
+            sb.AppendLine("            </tr>");
+        }
+        
+        sb.AppendLine("        </table>");
+    }
+
+    private void ExtractCountsAndDetails(string issue, ref string oracleCount, ref string postgresCount, ref string details)
+    {
+        // Extract Oracle count
+        var oracleMatch = System.Text.RegularExpressions.Regex.Match(issue, @"Oracle=(\d+)");
+        if (oracleMatch.Success)
+        {
+            oracleCount = oracleMatch.Groups[1].Value;
+        }
+        
+        // Extract PostgreSQL count
+        var postgresMatch = System.Text.RegularExpressions.Regex.Match(issue, @"PostgreSQL=(\d+)");
+        if (postgresMatch.Success)
+        {
+            postgresCount = postgresMatch.Groups[1].Value;
+        }
+        
+        // Extract details after the pipe
+        var pipeIndex = issue.IndexOf('|');
+        if (pipeIndex >= 0)
+        {
+            details = issue.Substring(pipeIndex + 1).Trim();
+            // Remove the icon if present in details
+            details = details.Replace("ℹ️", "").Replace("ℹ", "").Trim();
+        }
+        else
+        {
+            details = "-";
+        }
     }
 }

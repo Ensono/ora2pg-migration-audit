@@ -47,7 +47,15 @@ public class SchemaComparisonReportWriter
             report.AppendLine("   Issues Found:");
             foreach (var issue in result.TableIssues)
             {
-                report.AppendLine($"     {issue}");
+                var severity = GetIssueSeverity(issue);
+                var prefix = severity switch
+                {
+                    "Critical" => "     [CRITICAL]",
+                    "Warning" => "     [WARNING] ",
+                    "Info" => "     [INFO]    ",
+                    _ => "     "
+                };
+                report.AppendLine($"{prefix} {issue}");
             }
             report.AppendLine();
         }
@@ -99,7 +107,15 @@ public class SchemaComparisonReportWriter
             report.AppendLine("   Issues Found:");
             foreach (var issue in result.ConstraintIssues)
             {
-                report.AppendLine($"     {issue}");
+                var severity = GetIssueSeverity(issue);
+                var prefix = severity switch
+                {
+                    "Critical" => "     [CRITICAL]",
+                    "Warning" => "     [WARNING] ",
+                    "Info" => "     [INFO]    ",
+                    _ => "     "
+                };
+                report.AppendLine($"{prefix} {issue}");
             }
             report.AppendLine();
         }
@@ -117,7 +133,15 @@ public class SchemaComparisonReportWriter
             report.AppendLine("   Issues Found:");
             foreach (var issue in result.IndexIssues)
             {
-                report.AppendLine($"     {issue}");
+                var severity = GetIssueSeverity(issue);
+                var prefix = severity switch
+                {
+                    "Critical" => "     [CRITICAL]",
+                    "Warning" => "     [WARNING] ",
+                    "Info" => "     [INFO]    ",
+                    _ => "     "
+                };
+                report.AppendLine($"{prefix} {issue}");
             }
             report.AppendLine();
         }
@@ -148,12 +172,16 @@ public class SchemaComparisonReportWriter
         report.AppendLine($"     PostgreSQL: {result.PostgresSchema.TriggerCount} triggers");
         report.AppendLine();
         
-        var oracleProcCount = result.OracleSchema.ProcedureCount + result.OracleSchema.FunctionCount;
-        var postgresProcCount = result.PostgresSchema.ProcedureCount + result.PostgresSchema.FunctionCount;
-        report.AppendLine("   " + GetCheckmark(oracleProcCount == postgresProcCount) +
-            $" Procedures/Functions:");
-        report.AppendLine($"     Oracle:     {oracleProcCount} procedures/functions");
-        report.AppendLine($"     PostgreSQL: {postgresProcCount} procedures/functions");
+        report.AppendLine("   " + GetCheckmark(result.OracleSchema.ProcedureCount == result.PostgresSchema.ProcedureCount) +
+            $" Procedures:");
+        report.AppendLine($"     Oracle:     {result.OracleSchema.ProcedureCount} procedures");
+        report.AppendLine($"     PostgreSQL: {result.PostgresSchema.ProcedureCount} procedures");
+        report.AppendLine();
+        
+        report.AppendLine("   " + GetCheckmark(result.OracleSchema.FunctionCount == result.PostgresSchema.FunctionCount) +
+            $" Functions:");
+        report.AppendLine($"     Oracle:     {result.OracleSchema.FunctionCount} functions");
+        report.AppendLine($"     PostgreSQL: {result.PostgresSchema.FunctionCount} functions");
         report.AppendLine();
         
         if (result.CodeObjectIssues.Any())
@@ -161,7 +189,15 @@ public class SchemaComparisonReportWriter
             report.AppendLine("   Issues Found:");
             foreach (var issue in result.CodeObjectIssues)
             {
-                report.AppendLine($"     {issue}");
+                var severity = GetIssueSeverity(issue);
+                var prefix = severity switch
+                {
+                    "Critical" => "     [CRITICAL]",
+                    "Warning" => "     [WARNING] ",
+                    "Info" => "     [INFO]    ",
+                    _ => "     "
+                };
+                report.AppendLine($"{prefix} {issue}");
             }
             report.AppendLine();
         }
@@ -223,5 +259,13 @@ public class SchemaComparisonReportWriter
     private string GetCheckmark(bool condition)
     {
         return condition ? "✓" : "⚠️";
+    }
+
+    private string GetIssueSeverity(string issue)
+    {
+        if (issue.Contains("❌")) return "Critical";
+        if (issue.Contains("⚠️")) return "Warning";
+        if (issue.Contains("ℹ️") || issue.Contains("ℹ")) return "Info";
+        return "Info";
     }
 }
