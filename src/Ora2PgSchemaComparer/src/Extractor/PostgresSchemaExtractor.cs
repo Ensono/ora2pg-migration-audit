@@ -720,10 +720,15 @@ public class PostgresSchemaExtractor
         connection.Open();
         
         var query = @"
-            SELECT sequencename, start_value, increment_by, min_value, max_value, cycle
-            FROM pg_catalog.pg_sequences
-            WHERE schemaname = $1
-            ORDER BY sequencename";
+            SELECT sequence_name, 
+                   CAST(start_value AS BIGINT) as start_value,
+                   CAST(increment AS BIGINT) as increment_by,
+                   CAST(minimum_value AS BIGINT) as min_value,
+                   CAST(maximum_value AS BIGINT) as max_value,
+                   CASE WHEN cycle_option = 'YES' THEN true ELSE false END as cycle
+            FROM information_schema.sequences
+            WHERE sequence_schema = $1
+            ORDER BY sequence_name";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
         cmd.CommandTimeout = CommandTimeoutSeconds;

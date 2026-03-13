@@ -144,20 +144,6 @@ public class SchemaComparisonHtmlWriter : BaseHtmlReportWriter
             sb.AppendLine("            <p><em>Check application logs for detailed information and verify database permissions.</em></p>");
             sb.AppendLine("        </div>");
         }
-        else if (hasZeroCounts)
-        {
-            sb.AppendLine("        <div class=\"detail-box\" style=\"border-left-color: #17a2b8; margin-top: 30px;\">");
-            sb.AppendLine("            <h3 style=\"color: #17a2b8; margin-top: 0;\">\u2139\uFE0F Note: Oracle Code Objects Count</h3>");
-            sb.AppendLine("            <p>Oracle shows 0 for some code objects (sequences, triggers, procedures/functions). This may be expected if:</p>");
-            sb.AppendLine("            <ul>");
-            sb.AppendLine("                <li><strong>No Objects Exist:</strong> The schema genuinely has no sequences, triggers, or stored procedures.</li>");
-            sb.AppendLine("                <li><strong>User Permissions:</strong> The database user may lack SELECT privileges on system views (<code>all_sequences</code>, <code>all_triggers</code>, <code>all_objects</code>), causing queries to return 0 rows instead of failing.</li>");
-            sb.AppendLine("                <li><strong>Schema Scope:</strong> Objects may exist in different schemas or be owned by system accounts.</li>");
-            sb.AppendLine("                <li><strong>Database Configuration:</strong> Certain Oracle configurations or versions may restrict metadata access.</li>");
-            sb.AppendLine("            </ul>");
-            sb.AppendLine("            <p><em>If this is unexpected, check application logs and verify database permissions.</em></p>");
-            sb.AppendLine("        </div>");
-        }
 
 
         sb.Append(GenerateHtmlFooter());

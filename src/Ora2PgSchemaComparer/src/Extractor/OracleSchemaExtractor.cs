@@ -628,38 +628,80 @@ public class OracleSchemaExtractor
             using var connection = _connectionManager.GetConnection(DatabaseType.Oracle);
             connection.Open();
             
+            // Try dba_sequences first (requires DBA privileges), fallback to all_sequences
             var query = $@"
                 SELECT sequence_name, last_number, increment_by, min_value, max_value, 
                        cycle_flag, cache_size
-                FROM all_sequences
+                FROM dba_sequences
                 WHERE sequence_owner = '{schemaName.ToUpper()}'
                 ORDER BY sequence_name";
             
-            using var cmd = new OracleCommand(query, (OracleConnection)connection);
-            
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+            try
             {
-                var sequenceName = reader.GetString(0);
-                if (_objectFilter.IsObjectIgnored("sequence", sequenceName, schemaName))
+                using var cmd = new OracleCommand(query, (OracleConnection)connection);
+                using var reader = cmd.ExecuteReader();
+                
+                while (reader.Read())
                 {
-                    continue;
-                }
+                    var sequenceName = reader.GetString(0);
+                    if (_objectFilter.IsObjectIgnored("sequence", sequenceName, schemaName))
+                    {
+                        continue;
+                    }
 
-                sequences.Add(new SequenceDefinition
-                {
-                    SequenceName = sequenceName,
-                    SchemaName = schemaName.ToUpper(),
-                    CurrentValue = reader.IsDBNull(1) ? null : reader.GetDecimal(1),
-                    IncrementBy = reader.IsDBNull(2) ? null : reader.GetInt64(2),
-                    MinValue = reader.IsDBNull(3) ? null : reader.GetInt64(3),
-                    MaxValue = reader.IsDBNull(4) ? null : reader.GetDecimal(4),
-                    IsCycle = reader.GetString(5) == "Y",
-                    CacheSize = reader.IsDBNull(6) ? null : Convert.ToInt32(reader.GetValue(6))
-                });
+                    sequences.Add(new SequenceDefinition
+                    {
+                        SequenceName = sequenceName,
+                        SchemaName = schemaName.ToUpper(),
+                        CurrentValue = reader.IsDBNull(1) ? null : reader.GetDecimal(1),
+                        IncrementBy = reader.IsDBNull(2) ? null : reader.GetInt64(2),
+                        MinValue = reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                        MaxValue = reader.IsDBNull(4) ? null : reader.GetDecimal(4),
+                        IsCycle = reader.GetString(5) == "Y",
+                        CacheSize = reader.IsDBNull(6) ? null : Convert.ToInt32(reader.GetValue(6))
+                    });
+                }
+                
+                _logger.Information("✓ Extracted {Count} Oracle sequences from schema {SchemaName} (using dba_sequences)", sequences.Count, schemaName);
             }
-            
-            _logger.Information("✓ Extracted {Count} Oracle sequences from schema {SchemaName}", sequences.Count, schemaName);
+            catch (Oracle.ManagedDataAccess.Client.OracleException ex) when (ex.Number == 942) // ORA-00942: table or view does not exist
+            {
+                _logger.Warning("No access to dba_sequences, falling back to all_sequences");
+                
+                // Fallback to all_sequences
+                var fallbackQuery = $@"
+                    SELECT sequence_name, last_number, increment_by, min_value, max_value, 
+                           cycle_flag, cache_size
+                    FROM all_sequences
+                    WHERE sequence_owner = '{schemaName.ToUpper()}'
+                    ORDER BY sequence_name";
+                
+                using var cmd = new OracleCommand(fallbackQuery, (OracleConnection)connection);
+                using var reader = cmd.ExecuteReader();
+                
+                while (reader.Read())
+                {
+                    var sequenceName = reader.GetString(0);
+                    if (_objectFilter.IsObjectIgnored("sequence", sequenceName, schemaName))
+                    {
+                        continue;
+                    }
+
+                    sequences.Add(new SequenceDefinition
+                    {
+                        SequenceName = sequenceName,
+                        SchemaName = schemaName.ToUpper(),
+                        CurrentValue = reader.IsDBNull(1) ? null : reader.GetDecimal(1),
+                        IncrementBy = reader.IsDBNull(2) ? null : reader.GetInt64(2),
+                        MinValue = reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                        MaxValue = reader.IsDBNull(4) ? null : reader.GetDecimal(4),
+                        IsCycle = reader.GetString(5) == "Y",
+                        CacheSize = reader.IsDBNull(6) ? null : Convert.ToInt32(reader.GetValue(6))
+                    });
+                }
+                
+                _logger.Information("✓ Extracted {Count} Oracle sequences from schema {SchemaName} (using all_sequences)", sequences.Count, schemaName);
+            }
         }
         catch (Exception ex)
         {

@@ -213,24 +213,6 @@ public class SchemaComparisonReportWriter
             report.AppendLine();
             report.AppendLine("Check application logs for detailed information and verify database permissions.");
         }
-        else if (hasZeroCounts)
-        {
-            report.AppendLine();
-            report.AppendLine("================================================================================");
-            report.AppendLine("NOTE: ORACLE CODE OBJECTS COUNT");
-            report.AppendLine("================================================================================");
-            report.AppendLine();
-            report.AppendLine("Oracle shows 0 for some code objects (sequences, triggers, procedures/functions).");
-            report.AppendLine("This may be expected if:");
-            report.AppendLine();
-            report.AppendLine("  • No Objects Exist: Schema genuinely has no sequences, triggers, or procedures");
-            report.AppendLine("  • User Permissions: Database user may lack SELECT privileges on system views");
-            report.AppendLine("    (all_sequences, all_triggers, all_objects), causing queries to return 0 rows");
-            report.AppendLine("  • Schema Scope: Objects may exist in different schemas or system accounts");
-            report.AppendLine("  • Database Configuration: Oracle configuration may restrict metadata access");
-            report.AppendLine();
-            report.AppendLine("If this is unexpected, check application logs and verify database permissions.");
-        }
         
         report.AppendLine();
         report.AppendLine("================================================================================");

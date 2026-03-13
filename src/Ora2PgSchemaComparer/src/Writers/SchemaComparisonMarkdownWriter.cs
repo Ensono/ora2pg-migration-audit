@@ -149,22 +149,6 @@ public class SchemaComparisonMarkdownWriter
             sb.AppendLine("*Check application logs for detailed information and verify database permissions.*");
             sb.AppendLine();
         }
-        else if (hasZeroCounts)
-        {
-            sb.AppendLine("---");
-            sb.AppendLine();
-            sb.AppendLine("## \u2139\uFE0F Note: Oracle Code Objects Count");
-            sb.AppendLine();
-            sb.AppendLine("Oracle shows 0 for some code objects (sequences, triggers, procedures/functions). This may be expected if:");
-            sb.AppendLine();
-            sb.AppendLine("- **No Objects Exist:** The schema genuinely has no sequences, triggers, or stored procedures.");
-            sb.AppendLine("- **User Permissions:** The database user may lack SELECT privileges on system views (`all_sequences`, `all_triggers`, `all_objects`), causing queries to return 0 rows instead of failing.");
-            sb.AppendLine("- **Schema Scope:** Objects may exist in different schemas or be owned by system accounts.");
-            sb.AppendLine("- **Database Configuration:** Certain Oracle configurations or versions may restrict metadata access.");
-            sb.AppendLine();
-            sb.AppendLine("*If this is unexpected, check application logs and verify database permissions.*");
-            sb.AppendLine();
-        }
 
         sb.AppendLine("---");
         sb.AppendLine();

@@ -245,8 +245,13 @@ public class SchemaComparator
     
     private void CompareCodeObjects(ComparisonResult result)
     {
+        // Sequences
         if (result.OracleSchema.SequenceCount != result.PostgresSchema.SequenceCount)
         {
+            result.CodeObjectIssues.Add($"Sequence count mismatch: Oracle={result.OracleSchema.SequenceCount}, PostgreSQL={result.PostgresSchema.SequenceCount}");
+            
+            const int maxItemsToShow = 5;
+            
             var oracleSeqNames = new HashSet<string>(
                 result.OracleSchema.Sequences.Select(s => s.SequenceName),
                 StringComparer.OrdinalIgnoreCase);
@@ -256,108 +261,44 @@ public class SchemaComparator
             
             var missingSeqs = result.OracleSchema.Sequences
                 .Where(s => !postgresSeqNames.Contains(s.SequenceName))
+                .Select(s => s.SequenceName)
                 .ToList();
             
-            foreach (var seq in missingSeqs)
+            if (missingSeqs.Any())
             {
-                result.CodeObjectIssues.Add($"❌ Missing Sequence: {seq.SequenceName}");
+                var seqList = string.Join(", ", missingSeqs.Take(maxItemsToShow));
+                var remaining = missingSeqs.Count - maxItemsToShow;
+                var suffix = remaining > 0 ? $" (and {remaining} more)" : "";
+                result.CodeObjectIssues.Add($"  ℹ Missing sequences in PostgreSQL: {seqList}{suffix}");
             }
             
             var extraSeqs = result.PostgresSchema.Sequences
                 .Where(s => !oracleSeqNames.Contains(s.SequenceName))
+                .Select(s => s.SequenceName)
                 .ToList();
             
-            foreach (var seq in extraSeqs)
+            if (extraSeqs.Any())
             {
-                result.CodeObjectIssues.Add($"➕ Extra Sequence in PostgreSQL: {seq.SequenceName}");
+                var seqList = string.Join(", ", extraSeqs.Take(maxItemsToShow));
+                var remaining = extraSeqs.Count - maxItemsToShow;
+                var suffix = remaining > 0 ? $" (and {remaining} more)" : "";
+                result.CodeObjectIssues.Add($"  ℹ Extra sequences in PostgreSQL: {seqList}{suffix}");
             }
         }
 
         if (result.OracleSchema.ViewCount != result.PostgresSchema.ViewCount)
         {
-            var oracleViewNames = new HashSet<string>(
-                result.OracleSchema.Views.Select(v => v.ViewName),
-                StringComparer.OrdinalIgnoreCase);
-            var postgresViewNames = new HashSet<string>(
-                result.PostgresSchema.Views.Select(v => v.ViewName),
-                StringComparer.OrdinalIgnoreCase);
-            
-            var missingViews = result.OracleSchema.Views
-                .Where(v => !postgresViewNames.Contains(v.ViewName))
-                .ToList();
-            
-            foreach (var view in missingViews)
-            {
-                result.CodeObjectIssues.Add($"❌ Missing View: {view.ViewName}");
-            }
-            
-            var extraViews = result.PostgresSchema.Views
-                .Where(v => !oracleViewNames.Contains(v.ViewName))
-                .ToList();
-            
-            foreach (var view in extraViews)
-            {
-                result.CodeObjectIssues.Add($"➕ Extra View in PostgreSQL: {view.ViewName}");
-            }
+            result.CodeObjectIssues.Add($"View count mismatch: Oracle={result.OracleSchema.ViewCount}, PostgreSQL={result.PostgresSchema.ViewCount}");
         }
 
         if (result.OracleSchema.MaterializedViewCount != result.PostgresSchema.MaterializedViewCount)
         {
-            var oracleMViews = result.OracleSchema.Views.Where(v => v.IsMaterialized).ToList();
-            var postgresMViews = result.PostgresSchema.Views.Where(v => v.IsMaterialized).ToList();
-            
-            var oracleMViewNames = new HashSet<string>(
-                oracleMViews.Select(v => v.ViewName),
-                StringComparer.OrdinalIgnoreCase);
-            var postgresMViewNames = new HashSet<string>(
-                postgresMViews.Select(v => v.ViewName),
-                StringComparer.OrdinalIgnoreCase);
-            
-            var missingMViews = oracleMViews
-                .Where(v => !postgresMViewNames.Contains(v.ViewName))
-                .ToList();
-            
-            foreach (var mview in missingMViews)
-            {
-                result.CodeObjectIssues.Add($"❌ Missing Materialized View: {mview.ViewName}");
-            }
-            
-            var extraMViews = postgresMViews
-                .Where(v => !oracleMViewNames.Contains(v.ViewName))
-                .ToList();
-            
-            foreach (var mview in extraMViews)
-            {
-                result.CodeObjectIssues.Add($"➕ Extra Materialized View in PostgreSQL: {mview.ViewName}");
-            }
+            result.CodeObjectIssues.Add($"Materialized view count mismatch: Oracle={result.OracleSchema.MaterializedViewCount}, PostgreSQL={result.PostgresSchema.MaterializedViewCount}");
         }
 
         if (result.OracleSchema.TriggerCount != result.PostgresSchema.TriggerCount)
         {
-            var oracleTriggerNames = new HashSet<string>(
-                result.OracleSchema.Triggers.Select(t => t.TriggerName),
-                StringComparer.OrdinalIgnoreCase);
-            var postgresTriggerNames = new HashSet<string>(
-                result.PostgresSchema.Triggers.Select(t => t.TriggerName),
-                StringComparer.OrdinalIgnoreCase);
-            
-            var missingTriggers = result.OracleSchema.Triggers
-                .Where(t => !postgresTriggerNames.Contains(t.TriggerName))
-                .ToList();
-            
-            foreach (var trigger in missingTriggers)
-            {
-                result.CodeObjectIssues.Add($"❌ Missing Trigger: {trigger.TriggerName} on {trigger.TableName}");
-            }
-            
-            var extraTriggers = result.PostgresSchema.Triggers
-                .Where(t => !oracleTriggerNames.Contains(t.TriggerName))
-                .ToList();
-            
-            foreach (var trigger in extraTriggers)
-            {
-                result.CodeObjectIssues.Add($"➕ Extra Trigger in PostgreSQL: {trigger.TriggerName} on {trigger.TableName}");
-            }
+            result.CodeObjectIssues.Add($"Trigger count mismatch: Oracle={result.OracleSchema.TriggerCount}, PostgreSQL={result.PostgresSchema.TriggerCount}");
         }
 
         var oracleProcCount = result.OracleSchema.ProcedureCount + result.OracleSchema.FunctionCount;
@@ -365,30 +306,7 @@ public class SchemaComparator
         
         if (oracleProcCount != postgresProcCount)
         {
-            var oracleProcNames = new HashSet<string>(
-                result.OracleSchema.Procedures.Select(p => p.ProcedureName),
-                StringComparer.OrdinalIgnoreCase);
-            var postgresProcNames = new HashSet<string>(
-                result.PostgresSchema.Procedures.Select(p => p.ProcedureName),
-                StringComparer.OrdinalIgnoreCase);
-            
-            var missingProcs = result.OracleSchema.Procedures
-                .Where(p => !postgresProcNames.Contains(p.ProcedureName))
-                .ToList();
-            
-            foreach (var proc in missingProcs)
-            {
-                result.CodeObjectIssues.Add($"❌ Missing {proc.Type}: {proc.ProcedureName}");
-            }
-            
-            var extraProcs = result.PostgresSchema.Procedures
-                .Where(p => !oracleProcNames.Contains(p.ProcedureName))
-                .ToList();
-            
-            foreach (var proc in extraProcs)
-            {
-                result.CodeObjectIssues.Add($"➕ Extra {proc.Type} in PostgreSQL: {proc.ProcedureName}");
-            }
+            result.CodeObjectIssues.Add($"Procedure/Function count mismatch: Oracle={oracleProcCount}, PostgreSQL={postgresProcCount}");
         }
     }
 }
