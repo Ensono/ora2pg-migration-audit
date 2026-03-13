@@ -7,6 +7,7 @@ public class ObjectFilter
 {
     private readonly ILogger _logger = Log.ForContext<ObjectFilter>();
     private readonly List<string> _tableExclusionPatterns;
+    private readonly List<string> _viewExclusionPatterns;
     private readonly Dictionary<string, HashSet<string>> _ignoredObjects;
 
     public ObjectFilter(ApplicationProperties props)
@@ -16,12 +17,22 @@ public class ObjectFilter
             .Where(pattern => !string.IsNullOrWhiteSpace(pattern))
             .ToList();
 
+        var viewPatternsRaw = props.Get("VIEW_EXCLUSION_PATTERNS", props.Get("view.exclusion.patterns", string.Empty));
+        _viewExclusionPatterns = viewPatternsRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(pattern => !string.IsNullOrWhiteSpace(pattern))
+            .ToList();
+
         var ignoredRaw = props.Get("IGNORED_OBJECTS", props.Get("ignored.objects", string.Empty));
         _ignoredObjects = ParseIgnoredObjects(ignoredRaw);
 
         if (_tableExclusionPatterns.Count > 0)
         {
             _logger.Information("Table exclusion patterns enabled: {Patterns}", string.Join(", ", _tableExclusionPatterns));
+        }
+
+        if (_viewExclusionPatterns.Count > 0)
+        {
+            _logger.Information("View exclusion patterns enabled: {Patterns}", string.Join(", ", _viewExclusionPatterns));
         }
 
         if (_ignoredObjects.Count > 0)
@@ -54,6 +65,29 @@ public class ObjectFilter
         }
 
         if (IsObjectIgnored("table", fullName, schemaName) || IsObjectIgnored("table", shortName, schemaName))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    public bool IsViewExcluded(string viewReference, string? schemaName = null)
+    {
+        if (string.IsNullOrWhiteSpace(viewReference))
+        {
+            return false;
+        }
+
+        var fullName = viewReference.Trim();
+        var shortName = ExtractObjectName(fullName);
+
+        if (MatchesViewPattern(fullName) || MatchesViewPattern(shortName))
+        {
+            return true;
+        }
+
+        if (IsObjectIgnored("view", fullName, schemaName) || IsObjectIgnored("view", shortName, schemaName))
         {
             return true;
         }
@@ -117,6 +151,22 @@ public class ObjectFilter
         return filtered;
     }
 
+    public List<string> FilterViews(IEnumerable<string> viewNames, string? schemaName = null)
+    {
+        var filtered = new List<string>();
+        foreach (var viewName in viewNames)
+        {
+            if (IsViewExcluded(viewName, schemaName))
+            {
+                continue;
+            }
+
+            filtered.Add(viewName);
+        }
+
+        return filtered;
+    }
+
     private bool MatchesPattern(string tableName)
     {
         if (_tableExclusionPatterns.Count == 0)
@@ -135,6 +185,24 @@ public class ObjectFilter
         return false;
     }
 
+    private bool MatchesViewPattern(string viewName)
+    {
+        if (_viewExclusionPatterns.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var pattern in _viewExclusionPatterns)
+        {
+            if (viewName.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static string ExtractTableName(string tableReference)
     {
         if (tableReference.Contains('.'))
@@ -143,6 +211,16 @@ public class ObjectFilter
         }
 
         return tableReference;
+    }
+
+    private static string ExtractObjectName(string objectReference)
+    {
+        if (objectReference.Contains('.'))
+        {
+            return objectReference.Split('.', 2)[1];
+        }
+
+        return objectReference;
     }
 
     private static Dictionary<string, HashSet<string>> ParseIgnoredObjects(string raw)

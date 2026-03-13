@@ -13,7 +13,7 @@ public static class HashGenerator
         foreach (var key in sortedKeys)
         {
             var value = rowData[key];
-            string valueStr = value?.ToString() ?? "NULL";
+            string valueStr = ConvertValueToString(value);
             
             if (sb.Length > 0)
             {
@@ -33,6 +33,33 @@ public static class HashGenerator
         };
         
         return Convert.ToHexString(hashBytes).ToLower();
+    }
+    
+    private static string ConvertValueToString(object? value)
+    {
+        if (value is null)
+        {
+            return "NULL";
+        }
+
+       if (value is DateTime dt)
+        {
+            // Format: "yyyy-MM-dd HH:mm:ss.fff" (e.g., "2024-03-10 14:30:00.123")
+            return dt.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        if (value is DateTimeOffset dto)
+        {
+            // Format: "yyyy-MM-dd HH:mm:ss.fffzzz" (e.g., "2024-03-10 14:30:00.123+00:00")
+            return dto.ToString("yyyy-MM-dd HH:mm:ss.fffzzz", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        if (value is decimal || value is double || value is float)
+        {
+            return Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+        }
+
+        return value.ToString() ?? "NULL";
     }
     
     public static string GenerateHash(string input, string algorithm = "SHA256")

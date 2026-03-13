@@ -135,6 +135,152 @@ public class ComparisonDatabaseProcessor
     }
 
 
+    public void ProcessAndCompareObjects(Dictionary<string, (string targetObject, DatabaseObjectType objectType)> objectMapping)
+    {
+        Log.Information("");
+        Log.Information(new string('=', 80));
+        Log.Information("DUAL DATABASE EXTRACTION AND COMPARISON");
+        Log.Information(new string('=', 80));
+
+        if (objectMapping == null || objectMapping.Count == 0)
+        {
+            Log.Error("✗ No objects specified for comparison");
+            return;
+        }
+
+        int tableCount = objectMapping.Count(kvp => kvp.Value.objectType == DatabaseObjectType.Table);
+        int viewCount = objectMapping.Count(kvp => kvp.Value.objectType == DatabaseObjectType.View);
+
+        Log.Information("Objects to compare: {Total} ({Tables} tables, {Views} views)", 
+            objectMapping.Count, tableCount, viewCount);
+
+        var allResults = new List<ComparisonResult>();
+        int successCount = 0;
+        int failCount = 0;
+
+        foreach (var entry in objectMapping)
+        {
+            string sourceObject = entry.Key;
+            string targetObject = entry.Value.targetObject;
+            DatabaseObjectType objectType = entry.Value.objectType;
+
+            string objectTypeStr = objectType == DatabaseObjectType.Table ? "Table" : "View";
+
+            Log.Information("");
+            Log.Information(new string('-', 80));
+            Log.Information("Comparing {ObjectType}: {SourceObject} (Oracle) ↔ {TargetObject} (PostgreSQL)",
+                           objectTypeStr, sourceObject, targetObject);
+            Log.Information(new string('-', 80));
+
+            try
+            {
+                var result = ProcessObjectPair(sourceObject, targetObject, objectType);
+                allResults.Add(result);
+
+                if (result.IsMatch)
+                {
+                    successCount++;
+                    Log.Information("✓ {ObjectType}s match - migration validated successfully", objectTypeStr);
+                }
+                else
+                {
+                    failCount++;
+                    Log.Warning("✗ {ObjectType}s differ - migration validation failed", objectTypeStr);
+                    Log.Warning("  Missing in PostgreSQL: {Count} rows", result.MissingInTarget);
+                    Log.Warning("  Extra in PostgreSQL: {Count} rows", result.ExtraInTarget);
+                    Log.Warning("  Mismatched rows: {Count}", result.MismatchedRows);
+                }
+            }
+            catch (Exception ex)
+            {
+                failCount++;
+                Log.Error(ex, "✗ Failed to compare {ObjectType}s: {SourceObject} ↔ {TargetObject}",
+                         objectTypeStr, sourceObject, targetObject);
+                var errorResult = new ComparisonResult(sourceObject, targetObject, objectType)
+                {
+                    Error = ex.Message
+                };
+                allResults.Add(errorResult);
+            }
+        }
+
+        Log.Information("");
+        Log.Information(new string('=', 80));
+        Log.Information("MIGRATION VALIDATION SUMMARY");
+        Log.Information(new string('=', 80));
+        Log.Information("Total objects compared: {Count} ({Tables} tables, {Views} views)", 
+            objectMapping.Count, tableCount, viewCount);
+        Log.Information("✓ Successful validations: {Count}", successCount);
+        Log.Information("✗ Failed validations: {Count}", failCount);
+
+        try
+        {
+            var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            var props = ApplicationProperties.Instance;
+            var reportsDir = props.GetReportsDirectory("Ora2PgDataValidator");
+
+            var markdownWriter = new DataValidationMarkdownWriter();
+            var markdownReportPath = Path.Combine(reportsDir, $"data_fingerprint_validation_{timestamp}.md");
+            markdownWriter.WriteMarkdownReport(allResults, markdownReportPath);
+            Log.Information("📄 Markdown report saved to: {ReportPath}", markdownReportPath);
+
+            string textReportPath = _reportWriter.GenerateDetailedReport(allResults);
+            Log.Information("📄 Text report saved to: {ReportPath}", textReportPath);
+
+            var htmlWriter = new DataValidationHtmlWriter();
+            var htmlReportPath = Path.Combine(reportsDir, $"data_fingerprint_validation_{timestamp}.html");
+            htmlWriter.WriteHtmlReport(allResults, htmlReportPath);
+            Log.Information("📄 HTML report saved to: {ReportPath}", htmlReportPath);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "✗ Failed to generate comparison report");
+        }
+
+        Log.Information("");
+        Log.Information(new string('=', 80));
+        Log.Information("CSV hash files are available in the reports/ folder for manual review");
+        Log.Information(new string('=', 80));
+    }
+
+    private ComparisonResult ProcessObjectPair(string sourceObject, string targetObject, DatabaseObjectType objectType)
+    {
+        var result = new ComparisonResult(sourceObject, targetObject, objectType);
+
+        try
+        {
+            Log.Information("  Extracting Oracle data from {Object}...", sourceObject);
+            var (oracleHashes, oracleRows, oracleMetadata) = ExtractAndHashTable(DatabaseType.Oracle, sourceObject);
+            result.SourceRowCount = oracleHashes.Count;
+            Log.Information("  ✓ Oracle: {Count} rows extracted", oracleHashes.Count);
+
+            _csvWriter.WriteTableHashes(sourceObject, "Oracle", oracleHashes);
+
+            Log.Information("  Extracting PostgreSQL data from {Object}...", targetObject);
+            var (postgresHashes, postgresRows, postgresMetadata) = ExtractAndHashTable(DatabaseType.PostgreSQL, targetObject);
+            result.TargetRowCount = postgresHashes.Count;
+            Log.Information("  ✓ PostgreSQL: {Count} rows extracted", postgresHashes.Count);
+
+            _csvWriter.WriteTableHashes(targetObject, "PostgreSQL", postgresHashes);
+
+            Log.Information("  Comparing data...");
+            CompareHashes(oracleHashes, postgresHashes, oracleRows, postgresRows, oracleMetadata, postgresMetadata, result);
+
+            result.IsMatch = result.MismatchedRows == 0 && 
+                           result.MissingInTarget == 0 && 
+                           result.ExtraInTarget == 0;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "✗ Error processing object pair: {SourceObject} → {TargetObject}", sourceObject, targetObject);
+            result.Error = ex.Message;
+            result.IsMatch = false;
+        }
+
+        return result;
+    }
+
+
     private ComparisonResult ProcessTablePair(string oracleTable, string postgresTable)
     {
         var result = new ComparisonResult(oracleTable, postgresTable);

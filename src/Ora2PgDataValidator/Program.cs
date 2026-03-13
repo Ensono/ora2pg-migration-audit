@@ -3,6 +3,7 @@ using Ora2Pg.Common.Config;
 using Ora2Pg.Common.Connection;
 using Ora2PgDataValidator.Processor;
 using Ora2Pg.Common.Util;
+using Ora2PgDataValidator.src;
 
 namespace Ora2PgDataValidator;
 
@@ -31,6 +32,8 @@ class Program
             Log.Information("1. Loading configuration...");
             var props = ApplicationProperties.Instance;
             Log.Information("✓ Configuration loaded from .env");
+
+            ConfigurationValidator.ValidatePasswordSecurity(props);
 
             bool extractSingleDb = props.GetBool("EXTRACT_SINGLE_DB", props.GetBool("extract.single.db", false));
 
@@ -74,6 +77,12 @@ class Program
         }
 
         Log.Information("   Target Database: {TargetDb}", targetDatabase);
+
+        if (!ConfigurationValidator.ValidateSingleDatabaseModeConfig(props, targetDbStr))
+        {
+            Environment.Exit(1);
+            return;
+        }
 
         Log.Information("");
         Log.Information("3. Initializing {DbType} connection...", targetDatabase);
@@ -145,6 +154,12 @@ class Program
         Log.Information("");
         Log.Information("2. MODE: Dual Database Comparison (Migration Validation)");
 
+        if (!ConfigurationValidator.ValidateComparisonModeConfig(props))
+        {
+            Environment.Exit(1);
+            return;
+        }
+
         Log.Information("");
         Log.Information("3. Initializing database connections...");
         var oracleConfig = DatabaseConfig.CreateOracleConfig(props);
@@ -168,21 +183,21 @@ class Program
 
         Log.Information("✓ All database connections validated");
 
+        if (!ConfigurationValidator.ValidateComparisonTargets(props))
+        {
+            Environment.Exit(1);
+            return;
+        }
+
         string tablesConfig = props.Get("TABLES_TO_COMPARE", props.Get("tables.to.compare", ""));
 
         Dictionary<string, string> tableMapping;
 
         if (string.IsNullOrWhiteSpace(tablesConfig))
         {
-            Log.Error("");
-            Log.Error("✗ No tables specified for comparison");
-            Log.Error("  Set TABLES_TO_COMPARE in .env file");
-            Log.Error("  Format: schema.table,schema.table2 or ALL for auto-discovery");
-            Environment.Exit(1);
-            return;
+            tableMapping = new Dictionary<string, string>();
         }
-
-        if (tablesConfig.Trim().Equals("ALL", StringComparison.OrdinalIgnoreCase))
+        else if (tablesConfig.Trim().Equals("ALL", StringComparison.OrdinalIgnoreCase))
         {
             Log.Information("");
             Log.Information("5. Discovering all common tables between Oracle and PostgreSQL...");
@@ -247,19 +262,100 @@ class Program
             tableMapping = filteredMapping;
         }
 
+        string viewsConfig = props.Get("VIEWS_TO_COMPARE", "");
+        Dictionary<string, (string targetView, DatabaseObjectType objectType)> allObjectMapping = 
+            tableMapping.ToDictionary(kvp => kvp.Key, kvp => (kvp.Value, DatabaseObjectType.Table));
+
+        if (!string.IsNullOrWhiteSpace(viewsConfig))
+        {
+            Log.Information("");
+            Log.Information("6. Processing views configuration...");
+
+            Dictionary<string, string> viewMapping;
+
+            if (viewsConfig.Trim().Equals("ALL", StringComparison.OrdinalIgnoreCase))
+            {
+                Log.Information("Discovering all common views between Oracle and PostgreSQL...");
+                
+                string oracleSchema = props.Get("ORACLE_SCHEMA", "");
+                string postgresSchema = props.Get("POSTGRES_SCHEMA", "");
+
+                var oracleViews = connectionManager.GetViewsInSchema(DatabaseType.Oracle, oracleSchema);
+                var postgresViews = connectionManager.GetViewsInSchema(DatabaseType.PostgreSQL, postgresSchema);
+
+                viewMapping = new Dictionary<string, string>();
+                foreach (var oracleView in oracleViews)
+                {
+                    var matchingPostgresView = postgresViews
+                        .FirstOrDefault(pv => string.Equals(pv, oracleView, StringComparison.OrdinalIgnoreCase));
+                    
+                    if (matchingPostgresView != null)
+                    {
+                        string oracleRef = $"{oracleSchema}.{oracleView}";
+                        string postgresRef = $"{postgresSchema}.{matchingPostgresView}";
+                        viewMapping[oracleRef] = postgresRef;
+                    }
+                }
+
+                Log.Information("Found {Count} common views", viewMapping.Count);
+            }
+            else
+            {
+                viewMapping = CaseConverter.ParseAndNormalizeMapping(viewsConfig);
+                Log.Information("Parsed {Count} view mappings", viewMapping.Count);
+
+                var objectFilter = ObjectFilter.FromProperties(props);
+                var filteredViewMapping = new Dictionary<string, string>();
+                int excludedViewMappings = 0;
+                foreach (var entry in viewMapping)
+                {
+                    if (objectFilter.IsViewExcluded(entry.Key) || objectFilter.IsViewExcluded(entry.Value))
+                    {
+                        excludedViewMappings++;
+                        continue;
+                    }
+
+                    filteredViewMapping[entry.Key] = entry.Value;
+                }
+
+                if (excludedViewMappings > 0)
+                {
+                    Log.Information("Excluded {Count} view mapping(s) based on view exclusion patterns or ignored objects", excludedViewMappings);
+                }
+
+                viewMapping = filteredViewMapping;
+            }
+
+            foreach (var kvp in viewMapping)
+            {
+                allObjectMapping[kvp.Key] = (kvp.Value, DatabaseObjectType.View);
+            }
+
+            Log.Information("Total objects to compare: {Tables} tables + {Views} views = {Total}", 
+                tableMapping.Count, viewMapping.Count, allObjectMapping.Count);
+        }
+
         Log.Information("");
-        Log.Information("6. Configuration:");
+        Log.Information("{Step}. Configuration:", allObjectMapping.Count > tableMapping.Count ? "7" : "6");
         Log.Information("   Hash Algorithm: {Algorithm}", props.Get("HASH_ALGORITHM", props.Get("hash.algorithm", "SHA256")));
         Log.Information("   Batch Size: {BatchSize}", props.GetInt("BATCH_SIZE", props.GetInt("batch.size", 5000)));
         Log.Information("   Save Hashes to CSV: {SaveCsv}", props.GetBool("SAVE_HASHES_TO_CSV", props.GetBool("save.hashes.to.csv", true)));
         Log.Information("   Max Rows Per Table: {MaxRows}", props.GetInt("MAX_ROWS_PER_TABLE", props.GetInt("max.rows.per.table", 0)));
 
         Log.Information("");
-        Log.Information("7. Connection Pool Status:");
+        Log.Information("{Step}. Connection Pool Status:", allObjectMapping.Count > tableMapping.Count ? "8" : "7");
         Log.Information("   {OracleStats}", connectionManager.GetPoolStats(DatabaseType.Oracle));
         Log.Information("   {PostgresStats}", connectionManager.GetPoolStats(DatabaseType.PostgreSQL));
 
         var processor = new ComparisonDatabaseProcessor(connectionManager);
-        processor.ProcessAndCompareTables(tableMapping);
+        
+        if (allObjectMapping.Count > tableMapping.Count)
+        {
+            processor.ProcessAndCompareObjects(allObjectMapping);
+        }
+        else
+        {
+            processor.ProcessAndCompareTables(tableMapping);
+        }
     }
 }

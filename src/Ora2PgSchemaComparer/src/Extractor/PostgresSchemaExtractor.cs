@@ -334,6 +334,8 @@ public class PostgresSchemaExtractor
     private List<ConstraintDefinition> ExtractForeignKeys(string schemaName)
     {
         var fks = new List<ConstraintDefinition>();
+        var excludedFKs = new List<string>();
+        int totalFKsFound = 0;
         
         using var connection = _connectionManager.GetConnection(DatabaseType.PostgreSQL);
         connection.Open();
@@ -388,21 +390,33 @@ public class PostgresSchemaExtractor
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            totalFKsFound++;
+            var constraintName = reader.GetString(0);
             var tableName = reader.GetString(1);
+            var refSchema = reader.GetString(2);
             var referencedTable = reader.GetString(3);
-            if (_objectFilter.IsTableExcluded(tableName, schemaName) ||
-                _objectFilter.IsTableExcluded(referencedTable, reader.GetString(2)))
+            
+            var tableExcluded = _objectFilter.IsTableExcluded(tableName, schemaName);
+            var refTableExcluded = _objectFilter.IsTableExcluded(referencedTable, refSchema);
+            
+            if (tableExcluded || refTableExcluded)
             {
+                var reason = tableExcluded 
+                    ? $"source table '{tableName}' excluded" 
+                    : $"referenced table '{referencedTable}' excluded";
+                excludedFKs.Add($"{constraintName} ({tableName} → {referencedTable}): {reason}");
+                _logger.Debug("Excluding FK {ConstraintName}: {Table} → {RefTable} ({Reason})", 
+                    constraintName, tableName, referencedTable, reason);
                 continue;
             }
 
             fks.Add(new ConstraintDefinition
             {
-                ConstraintName = reader.GetString(0),
+                ConstraintName = constraintName,
                 SchemaName = schemaName.ToLower(),
                 TableName = tableName,
                 Type = ConstraintType.ForeignKey,
-                ReferencedSchemaName = reader.GetString(2),
+                ReferencedSchemaName = refSchema,
                 ReferencedTableName = referencedTable,
                 OnDeleteRule = reader.GetString(4),
                 OnUpdateRule = reader.GetString(5),
@@ -411,6 +425,20 @@ public class PostgresSchemaExtractor
                 Columns = reader.GetString(8).Split(',').ToList(),
                 ReferencedColumns = reader.GetString(9).Split(',').ToList()
             });
+        }
+        
+        if (excludedFKs.Count > 0)
+        {
+            _logger.Information("PostgreSQL FK Summary: {Total} total, {Included} included, {Excluded} excluded by filters",
+                totalFKsFound, fks.Count, excludedFKs.Count);
+            foreach (var excluded in excludedFKs)
+            {
+                _logger.Information("  ⊗ Excluded FK: {Details}", excluded);
+            }
+        }
+        else
+        {
+            _logger.Information("PostgreSQL FK Summary: {Total} foreign keys extracted (no exclusions)", totalFKsFound);
         }
         
         return fks;
@@ -512,15 +540,72 @@ public class PostgresSchemaExtractor
     private List<IndexDefinition> ExtractIndexes(string schemaName)
     {
         var indexes = new List<IndexDefinition>();
+        var excludedIndexes = new List<string>();
+        int totalIndexesFound = 0;
         
         using var connection = _connectionManager.GetConnection(DatabaseType.PostgreSQL);
         connection.Open();
+        
+        var fkInfoQuery = @"
+            SELECT 
+                con.conname as constraint_name,
+                t.relname as table_name,
+                array_to_string(ARRAY(
+                    SELECT a.attname 
+                    FROM unnest(con.conkey) WITH ORDINALITY AS u(attnum, ord)
+                    JOIN pg_attribute a ON a.attnum = u.attnum AND a.attrelid = con.conrelid
+                    ORDER BY u.ord
+                ), ',') as fk_columns
+            FROM pg_catalog.pg_constraint con
+            JOIN pg_catalog.pg_class t ON t.oid = con.conrelid
+            JOIN pg_catalog.pg_namespace tn ON tn.oid = t.relnamespace
+            WHERE con.contype = 'f'
+              AND tn.nspname = $1";
+        
+        var fkColumnSets = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        var fkConstraintNames = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        
+        using (var fkCmd = new NpgsqlCommand(fkInfoQuery, (NpgsqlConnection)connection))
+        {
+            fkCmd.CommandTimeout = CommandTimeoutSeconds;
+            fkCmd.Parameters.AddWithValue(schemaName.ToLower());
+            
+            using var fkReader = fkCmd.ExecuteReader();
+            while (fkReader.Read())
+            {
+                var constraintName = fkReader.GetString(0);
+                var tableName = fkReader.GetString(1);
+                var fkColumns = fkReader.GetString(2);
+                
+                if (!fkColumnSets.ContainsKey(tableName))
+                {
+                    fkColumnSets[tableName] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                }
+                fkColumnSets[tableName].Add(fkColumns);
+                
+                if (!fkConstraintNames.ContainsKey(tableName))
+                {
+                    fkConstraintNames[tableName] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                }
+                fkConstraintNames[tableName].Add(constraintName);
+                
+                _logger.Debug("Found FK constraint {ConstraintName} on {Table}({Columns})", 
+                    constraintName, tableName, fkColumns);
+            }
+        }
         
         var query = @"
             SELECT ic.relname as indexname,
                    t.relname as tablename,
                    am.amname,
-                   idx.indisunique
+                   idx.indisunique,
+                   array_to_string(ARRAY(
+                       SELECT a.attname
+                       FROM unnest(idx.indkey) WITH ORDINALITY AS u(attnum, ord)
+                       JOIN pg_attribute a ON a.attnum = u.attnum AND a.attrelid = idx.indrelid
+                       WHERE a.attnum > 0
+                       ORDER BY u.ord
+                   ), ',') as index_columns
             FROM pg_catalog.pg_index idx
             JOIN pg_catalog.pg_class ic ON ic.oid = idx.indexrelid
             JOIN pg_catalog.pg_class t ON t.oid = idx.indrelid
@@ -541,12 +626,47 @@ public class PostgresSchemaExtractor
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            totalIndexesFound++;
             var indexName = reader.GetString(0);
             var tableName = reader.GetString(1);
+            var indexColumns = reader.GetString(4);
+            
             if (_objectFilter.IsTableExcluded(tableName, schemaName) ||
                 _objectFilter.IsObjectIgnored("index", indexName, schemaName))
             {
+                excludedIndexes.Add($"{indexName} on {tableName}: table/index excluded by filter");
+                _logger.Debug("Excluding index {IndexName} on {Table}: filtered", indexName, tableName);
                 continue;
+            }
+
+            var matchesColumns = fkColumnSets.ContainsKey(tableName) &&
+                               fkColumnSets[tableName].Contains(indexColumns);
+
+            var containsFkInName = indexName.Contains("(fk)", StringComparison.OrdinalIgnoreCase) ||
+                                  System.Text.RegularExpressions.Regex.IsMatch(indexName, @"_fk\d*$", 
+                                      System.Text.RegularExpressions.RegexOptions.IgnoreCase) ||
+                                  System.Text.RegularExpressions.Regex.IsMatch(indexName, @"^fk[a-z0-9]+", 
+                                      System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            
+            var matchesConstraintName = false;
+            if (fkConstraintNames.ContainsKey(tableName))
+            {
+                matchesConstraintName = fkConstraintNames[tableName].Any(fkName =>
+                    indexName.Equals(fkName, StringComparison.OrdinalIgnoreCase) ||
+                    indexName.StartsWith(fkName + "_", StringComparison.OrdinalIgnoreCase));
+            }
+            
+            var isFKSupportingIndex = matchesColumns || containsFkInName || matchesConstraintName;
+            
+            if (isFKSupportingIndex)
+            {
+                var reasons = new List<string>();
+                if (matchesColumns) reasons.Add("columns match FK");
+                if (containsFkInName) reasons.Add("name contains FK pattern");
+                if (matchesConstraintName) reasons.Add("name matches FK constraint");
+                
+                _logger.Debug("Index {IndexName} on {Table}({Columns}) identified as FK-supporting: {Reasons}", 
+                    indexName, tableName, indexColumns, string.Join(", ", reasons));
             }
 
             var amname = reader.GetString(2);
@@ -565,6 +685,30 @@ public class PostgresSchemaExtractor
             indexes.Add(index);
         }
         
+        if (excludedIndexes.Count > 0)
+        {
+            _logger.Information("PostgreSQL Index Summary: {Total} total, {Included} included, {Excluded} excluded by filters",
+                totalIndexesFound, indexes.Count, excludedIndexes.Count);
+            foreach (var excluded in excludedIndexes)
+            {
+                _logger.Information("  ⊗ Excluded Index: {Details}", excluded);
+            }
+        }
+        else
+        {
+            _logger.Information("PostgreSQL Index Summary: {Total} indexes extracted (no exclusions)", totalIndexesFound);
+        }
+        
+        var fkSupportingCount = indexes.Count(i => 
+            fkColumnSets.ContainsKey(i.TableName) && 
+            fkColumnSets[i.TableName].Any());
+        
+        if (fkSupportingCount > 0)
+        {
+            _logger.Information("  ℹ {Count} indexes identified as FK-supporting indexes (created by DMS for foreign key performance)", 
+                fkSupportingCount);
+        }
+        
         return indexes;
     }
     
@@ -576,10 +720,15 @@ public class PostgresSchemaExtractor
         connection.Open();
         
         var query = @"
-            SELECT sequencename, start_value, increment_by, min_value, max_value, cycle
-            FROM pg_catalog.pg_sequences
-            WHERE schemaname = $1
-            ORDER BY sequencename";
+            SELECT sequence_name, 
+                   CAST(start_value AS BIGINT) as start_value,
+                   CAST(increment AS BIGINT) as increment_by,
+                   CAST(minimum_value AS BIGINT) as min_value,
+                   CAST(maximum_value AS BIGINT) as max_value,
+                   CASE WHEN cycle_option = 'YES' THEN true ELSE false END as cycle
+            FROM information_schema.sequences
+            WHERE sequence_schema = $1
+            ORDER BY sequence_name";
         
         using var cmd = new NpgsqlCommand(query, (NpgsqlConnection)connection);
         cmd.CommandTimeout = CommandTimeoutSeconds;
@@ -589,7 +738,8 @@ public class PostgresSchemaExtractor
         while (reader.Read())
         {
             var sequenceName = reader.GetString(0);
-            if (_objectFilter.IsObjectIgnored("sequence", sequenceName, schemaName))
+            if (_objectFilter.IsObjectIgnored("sequence", sequenceName, schemaName) ||
+                IsSequenceForExcludedTable(sequenceName, schemaName))
             {
                 continue;
             }
@@ -761,7 +911,8 @@ public class PostgresSchemaExtractor
             var procedureName = reader.GetString(0);
             var typeKey = reader.GetString(1) == "FUNCTION" ? "function" : "procedure";
 
-            if (_objectFilter.IsObjectIgnored(typeKey, procedureName, schemaName))
+            if (_objectFilter.IsObjectIgnored(typeKey, procedureName, schemaName) ||
+                IsProcedureForExcludedObject(procedureName, schemaName))
             {
                 continue;
             }
@@ -776,5 +927,103 @@ public class PostgresSchemaExtractor
         }
         
         return procedures;
+    }
+
+    private bool IsSequenceForExcludedTable(string sequenceName, string schemaName)
+    {
+        var seqNameLower = sequenceName.ToLower();
+        
+        // Remove common suffixes
+        var withoutSeqSuffix = seqNameLower.Replace("_seq", "").Replace("_id", "");
+        
+        // Remove common prefixes
+        var withoutSeqPrefix = seqNameLower.StartsWith("seq_") ? seqNameLower.Substring(4) : seqNameLower;
+        
+        // Check if the base name (without SEQ suffix/prefix) matches an excluded table
+        var potentialTableNames = new[]
+        {
+            withoutSeqSuffix,
+            withoutSeqPrefix,
+            seqNameLower.Replace("_seq", "").Replace("_id_seq", ""), // Handle table_id_seq pattern
+        };
+        
+        foreach (var tableName in potentialTableNames.Distinct())
+        {
+            if (_objectFilter.IsTableExcluded(tableName, schemaName))
+            {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+    private bool IsProcedureForExcludedObject(string procedureName, string schemaName)
+    {
+        var procNameLower = procedureName.ToLower();
+        
+        // Remove common prefixes
+        var withoutProcPrefix = procNameLower.StartsWith("proc_") ? procNameLower.Substring(5) :
+                               procNameLower.StartsWith("sp_") ? procNameLower.Substring(3) :
+                               procNameLower.StartsWith("fn_") ? procNameLower.Substring(3) :
+                               procNameLower;
+        
+        // Remove common suffixes
+        var withoutProcSuffix = procNameLower.Replace("_proc", "")
+                                            .Replace("_sp", "")
+                                            .Replace("_fn", "")
+                                            .Replace("_insert", "")
+                                            .Replace("_update", "")
+                                            .Replace("_delete", "")
+                                            .Replace("_select", "")
+                                            .Replace("_get", "")
+                                            .Replace("_set", "");
+        
+        // Check if the base name matches an excluded table
+        var potentialTableNames = new[]
+        {
+            withoutProcPrefix,
+            withoutProcSuffix,
+            procNameLower.Replace("_proc", "").Replace("_insert", "").Replace("_update", "").Replace("_delete", "")
+        };
+        
+        foreach (var tableName in potentialTableNames.Distinct())
+        {
+            if (string.IsNullOrWhiteSpace(tableName))
+                continue;
+                
+            // Check if table is excluded via patterns
+            if (_objectFilter.IsTableExcluded(tableName, schemaName))
+            {
+                return true;
+            }
+            
+            // Check if table is in IGNORED_OBJECTS
+            if (_objectFilter.IsObjectIgnored("table", tableName, schemaName))
+            {
+                return true;
+            }
+        }
+        
+        // Check if the procedure/function belongs to an ignored package (schema in PostgreSQL)
+        // PostgreSQL uses schemas, but check for package-like naming conventions
+        var potentialPackageNames = new[]
+        {
+            withoutProcPrefix,
+            procNameLower.Split('_')[0] // First part might be package/module name
+        };
+        
+        foreach (var packageName in potentialPackageNames.Distinct())
+        {
+            if (string.IsNullOrWhiteSpace(packageName))
+                continue;
+                
+            if (_objectFilter.IsObjectIgnored("package", packageName, schemaName))
+            {
+                return true;
+            }
+        }
+        
+        return false;
     }
 }

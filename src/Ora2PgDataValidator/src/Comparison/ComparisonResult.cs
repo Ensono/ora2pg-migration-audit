@@ -4,6 +4,7 @@ public class ComparisonResult
 {
     public string SourceTable { get; }
     public string TargetTable { get; }
+    public DatabaseObjectType ObjectType { get; set; } = DatabaseObjectType.Table;
 
     public int SourceRowCount { get; set; }
     public int TargetRowCount { get; set; }
@@ -22,10 +23,11 @@ public class ComparisonResult
     public Dictionary<int, Dictionary<string, object?>> ExtraRowPrimaryKeys { get; } = new();
     public Dictionary<int, RowPrimaryKeyPair> MismatchedRowPrimaryKeys { get; } = new();
 
-    public ComparisonResult(string sourceTable, string targetTable)
+    public ComparisonResult(string sourceTable, string targetTable, DatabaseObjectType objectType = DatabaseObjectType.Table)
     {
         SourceTable = sourceTable;
         TargetTable = targetTable;
+        ObjectType = objectType;
     }
 
     public void AddMissingRow(int rowId, string hash)

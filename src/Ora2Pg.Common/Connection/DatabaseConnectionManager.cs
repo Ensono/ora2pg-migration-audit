@@ -159,6 +159,51 @@ public class DatabaseConnectionManager : IDisposable
         return children;
     }
 
+    public List<string> GetViewsInSchema(DatabaseType dbType, string schema)
+    {
+        var views = new List<string>();
+        
+        try
+        {
+            using var connection = GetConnection(dbType);
+            connection.Open();
+            
+            string query = dbType == DatabaseType.Oracle
+                ? "SELECT view_name FROM all_views WHERE owner = :schema ORDER BY view_name"
+                : "SELECT table_name FROM information_schema.views WHERE table_schema = @schema ORDER BY table_name";
+            
+            using var command = connection.CreateCommand();
+            command.CommandText = query;
+            
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = dbType == DatabaseType.Oracle ? "schema" : "@schema";
+            parameter.Value = schema;
+            command.Parameters.Add(parameter);
+            
+            using (var reader = command.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    views.Add(reader.GetString(0));
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Error getting views in schema {Schema} for {DbType}", schema, dbType);
+        }
+
+        var objectFilter = ObjectFilter.FromProperties();
+        var filteredViews = objectFilter.FilterViews(views, schema);
+        var excludedCount = views.Count - filteredViews.Count;
+        if (excludedCount > 0)
+        {
+            _logger.Information("Filtered {ExcludedCount} view(s) from {DbType} schema {Schema}",
+                excludedCount, dbType, schema);
+        }
+
+        return filteredViews;
+    }
 
     public string GetPoolStats(DatabaseType dbType)
     {

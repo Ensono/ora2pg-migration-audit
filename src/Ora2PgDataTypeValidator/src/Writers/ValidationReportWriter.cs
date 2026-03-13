@@ -22,6 +22,8 @@ public class ValidationReportWriter
 
         sb.AppendLine("# Oracle to PostgreSQL Data Type Validation Report");
         sb.AppendLine();
+        sb.AppendLine("🆕 **DMS-Pattern Validation** - Validates against actual GCP Database Migration Service conversion patterns");
+        sb.AppendLine();
         sb.AppendLine($"**Generated:** {result.ValidationTime:yyyy-MM-dd HH:mm:ss}");
         sb.AppendLine($"**Oracle Schema:** {result.OracleSchema}");
         sb.AppendLine($"**PostgreSQL Schema:** {result.PostgresSchema}");
@@ -39,6 +41,8 @@ public class ValidationReportWriter
         sb.AppendLine($"| Info Messages | {result.InfoMessages} ℹ️ |");
         sb.AppendLine();
 
+        WriteCategorySummary(sb, result);
+
         if (result.Issues.Any())
         {
             WriteSeveritySection(sb, result, ValidationSeverity.Critical, "❌ Critical Issues");
@@ -46,8 +50,6 @@ public class ValidationReportWriter
             WriteSeveritySection(sb, result, ValidationSeverity.Warning, "⚠️ Warnings");
             WriteSeveritySection(sb, result, ValidationSeverity.Info, "ℹ️ Information");
         }
-
-        WriteCategorySummary(sb, result);
 
         await File.WriteAllTextAsync(outputPath, sb.ToString());
         Log.Information($"📄 Markdown report written to: {outputPath}");
@@ -59,6 +61,7 @@ public class ValidationReportWriter
 
         sb.AppendLine("===============================================================================");
         sb.AppendLine("  ORACLE TO POSTGRESQL DATA TYPE VALIDATION REPORT");
+        sb.AppendLine("  DMS-Pattern Based Validation");
         sb.AppendLine("===============================================================================");
         sb.AppendLine();
         sb.AppendLine($"Generated:          {result.ValidationTime:yyyy-MM-dd HH:mm:ss}");
@@ -77,6 +80,8 @@ public class ValidationReportWriter
         sb.AppendLine($"Info Messages:              {result.InfoMessages}");
         sb.AppendLine();
 
+        WriteCategorySummaryText(sb, result);
+
         if (result.Issues.Any())
         {
             WriteSeveritySectionText(sb, result, ValidationSeverity.Critical, "CRITICAL ISSUES");
@@ -84,8 +89,6 @@ public class ValidationReportWriter
             WriteSeveritySectionText(sb, result, ValidationSeverity.Warning, "WARNINGS");
             WriteSeveritySectionText(sb, result, ValidationSeverity.Info, "INFORMATION");
         }
-
-        WriteCategorySummaryText(sb, result);
 
         await File.WriteAllTextAsync(outputPath, sb.ToString());
         Log.Information($"📄 Text report written to: {outputPath}");
@@ -101,7 +104,7 @@ public class ValidationReportWriter
 
         foreach (var issue in issues.OrderBy(i => i.TableName).ThenBy(i => i.ColumnName))
         {
-            sb.AppendLine($"### {issue.TableName}.{issue.ColumnName}");
+            sb.AppendLine($"### {GetCategoryIcon(issue.Category)} {issue.TableName}.{issue.ColumnName}");
             sb.AppendLine();
             sb.AppendLine($"**Category:** {issue.Category}");
             sb.AppendLine($"**Mapping:** Oracle `{issue.OracleType}` → PostgreSQL `{issue.PostgresType}`");
@@ -270,5 +273,66 @@ public class ValidationReportWriter
         "WARNING" => "⚠️",
         "FAILED" => "❌",
         _ => "❓"
+    };
+
+    private string GetCategoryIcon(string category) => category switch
+    {
+        // DMS Validation
+        "Type Mapping Mismatch" => "🔀",
+        "Valid Mapping" => "✅",
+        
+        // Numeric Issues
+        "Numeric Overflow Risk" => "⚠️",
+        "Precision/Scale Mismatch" => "🔢",
+        "Invalid Mapping" => "❌",
+        "Storage Optimization" => "💾",
+        
+        // String Issues
+        "String Type Mismatch" => "📝",
+        "Text Truncation Risk" => "✂️",
+        "Character Encoding" => "🔤",
+        "Padding Behavior" => "↔️",
+        
+        // Date/Time Issues
+        "Time Data Loss" => "⏰",
+        "Date Mapping OK" => "📅",
+        "Timestamp Type Mismatch" => "🕐",
+        "Timezone Type Mismatch" => "🌍",
+        "UTC Conversion" => "🌐",
+        
+        // Advanced Types
+        "XML Type Mismatch" => "📄",
+        "XML Features Lost" => "📋",
+        "JSON Type Mismatch" => "🔧",
+        "JSONB Recommended" => "⚡",
+        "Binary Type Mismatch" => "📦",
+        "Spatial Type Missing" => "🗺️",
+        "Spatial Type OK" => "📍",
+        
+        // Legacy/Deprecated
+        "Legacy LONG Type" => "⚠️",
+        "Deprecated Type" => "🚫",
+        "Deprecated Binary Type" => "🚫",
+        
+        // Critical Issues
+        "Empty String Handling" => "⚠️",
+        "External File Pointer" => "🔴",
+        "User-Defined Type" => "🔴",
+        
+        // Auto-increment
+        "Auto-Increment Missing" => "🔢",
+        "Auto-Increment OK" => "🔢",
+        
+        // Float/Precision
+        "Float Type Mismatch" => "🔢",
+        "Rounding Errors" => "≈",
+        "Float Precision" => "🎯",
+        
+        // Misc
+        "Boolean Conversion" => "✓",
+        "Unicode Support" => "🌐",
+        "Binary File Validation" => "📁",
+        
+        _ => "•"
     };
 }

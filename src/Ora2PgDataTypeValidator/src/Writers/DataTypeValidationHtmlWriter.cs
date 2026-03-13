@@ -18,6 +18,11 @@ public class DataTypeValidationHtmlWriter : BaseHtmlReportWriter
         var sb = new StringBuilder();
 
         sb.Append(GenerateHtmlHeader("Oracle to PostgreSQL Data Type Validation Report"));
+        
+        sb.AppendLine("        <div style=\"background-color: #e7f3ff; border-left: 4px solid #2196F3; padding: 12px; margin: 20px 0; border-radius: 4px;\">");
+        sb.AppendLine("            <strong>🆕 DMS-Pattern Based Validation</strong>");
+        sb.AppendLine("            <p style=\"margin: 5px 0 0 0; color: #555;\">Validates against actual GCP Database Migration Service conversion patterns extracted from production migrations.</p>");
+        sb.AppendLine("        </div>");
 
         var metadata = new Dictionary<string, string>
         {
@@ -49,6 +54,32 @@ public class DataTypeValidationHtmlWriter : BaseHtmlReportWriter
 
         if (result.Issues.Any())
         {
+            var issuesByCategory = result.Issues
+                .GroupBy(i => i.Category)
+                .Select(g => new { Category = g.Key, Count = g.Count() })
+                .OrderByDescending(x => x.Count)
+                .ToList();
+            
+            sb.AppendLine("        <h2>Issues by Category</h2>");
+            sb.AppendLine("        <table>");
+            sb.AppendLine("            <tr>");
+            sb.AppendLine("                <th>Category</th>");
+            sb.AppendLine("                <th style=\"text-align: right;\">Count</th>");
+            sb.AppendLine("            </tr>");
+            
+            foreach (var category in issuesByCategory)
+            {
+                sb.AppendLine("            <tr>");
+                sb.AppendLine($"                <td>{GetCategoryIcon(category.Category)} {EscapeHtml(category.Category)}</td>");
+                sb.AppendLine($"                <td class=\"number\">{category.Count}</td>");
+                sb.AppendLine("            </tr>");
+            }
+            
+            sb.AppendLine("        </table>");
+        }
+
+        if (result.Issues.Any())
+        {
             sb.AppendLine("        <h2>Validation Details</h2>");
             sb.AppendLine("        <table>");
             sb.AppendLine("            <tr>");
@@ -60,9 +91,19 @@ public class DataTypeValidationHtmlWriter : BaseHtmlReportWriter
             sb.AppendLine("                <th>Issue & Recommendation</th>");
             sb.AppendLine("            </tr>");
             
-            var issuesToShow = result.Issues.Take(100).ToList();
+            var sortedIssues = result.Issues
+                .OrderBy(i => i.Severity switch
+                {
+                    ValidationSeverity.Critical => 1,
+                    ValidationSeverity.Error => 2,
+                    ValidationSeverity.Warning => 3,
+                    ValidationSeverity.Info => 4,
+                    _ => 5
+                })
+                .ThenBy(i => i.TableName)
+                .ThenBy(i => i.ColumnName);
             
-            foreach (var issue in issuesToShow)
+            foreach (var issue in sortedIssues)
             {
                 var severityIcon = GetSeverityIcon(issue.Severity.ToString());
                 var rowClass = GetSeverityCssClass(issue.Severity.ToString());
@@ -72,7 +113,7 @@ public class DataTypeValidationHtmlWriter : BaseHtmlReportWriter
                 sb.AppendLine($"                <td><span class=\"code\">{EscapeHtml(issue.TableName)}.{EscapeHtml(issue.ColumnName)}</span></td>");
                 sb.AppendLine($"                <td><span class=\"code\">{EscapeHtml(issue.OracleType)}</span></td>");
                 sb.AppendLine($"                <td><span class=\"code\">{EscapeHtml(issue.PostgresType)}</span></td>");
-                sb.AppendLine($"                <td>{EscapeHtml(issue.Category)}</td>");
+                sb.AppendLine($"                <td>{GetCategoryIcon(issue.Category)} {EscapeHtml(issue.Category)}</td>");
                 sb.AppendLine("                <td>");
                 sb.AppendLine($"                    <strong>Issue:</strong> {EscapeHtml(issue.Message)}");
                 
@@ -98,11 +139,6 @@ public class DataTypeValidationHtmlWriter : BaseHtmlReportWriter
             }
             
             sb.AppendLine("        </table>");
-            
-            if (result.Issues.Count > 100)
-            {
-                sb.AppendLine($"        <p><em>... and {result.Issues.Count - 100} more issues</em></p>");
-            }
         }
         else
         {
@@ -110,36 +146,70 @@ public class DataTypeValidationHtmlWriter : BaseHtmlReportWriter
             sb.AppendLine("            <p style=\"color: #28a745; font-size: 1.1em;\">✅ <strong>Perfect!</strong> All data types are compatible and properly mapped.</p>");
             sb.AppendLine("        </div>");
         }
-        
-
-        if (result.Issues.Any())
-        {
-            var issuesByCategory = result.Issues
-                .GroupBy(i => i.Category)
-                .Select(g => new { Category = g.Key, Count = g.Count() })
-                .OrderByDescending(x => x.Count)
-                .ToList();
-            
-            sb.AppendLine("        <h2>Issues by Category</h2>");
-            sb.AppendLine("        <table>");
-            sb.AppendLine("            <tr>");
-            sb.AppendLine("                <th>Category</th>");
-            sb.AppendLine("                <th style=\"text-align: right;\">Count</th>");
-            sb.AppendLine("            </tr>");
-            
-            foreach (var category in issuesByCategory)
-            {
-                sb.AppendLine("            <tr>");
-                sb.AppendLine($"                <td>{EscapeHtml(category.Category)}</td>");
-                sb.AppendLine($"                <td class=\"number\">{category.Count}</td>");
-                sb.AppendLine("            </tr>");
-            }
-            
-            sb.AppendLine("        </table>");
-        }
 
         sb.Append(GenerateHtmlFooter());
         
         return sb.ToString();
     }
+
+    private string GetCategoryIcon(string category) => category switch
+    {
+        // DMS Validation
+        "Type Mapping Mismatch" => "🔀",
+        "Valid Mapping" => "✅",
+        
+        // Numeric Issues
+        "Numeric Overflow Risk" => "⚠️",
+        "Precision/Scale Mismatch" => "🔢",
+        "Invalid Mapping" => "❌",
+        "Storage Optimization" => "💾",
+        
+        // String Issues
+        "String Type Mismatch" => "📝",
+        "Text Truncation Risk" => "✂️",
+        "Character Encoding" => "🔤",
+        "Padding Behavior" => "↔️",
+        
+        // Date/Time Issues
+        "Time Data Loss" => "⏰",
+        "Date Mapping OK" => "📅",
+        "Timestamp Type Mismatch" => "🕐",
+        "Timezone Type Mismatch" => "🌍",
+        "UTC Conversion" => "🌐",
+        
+        // Advanced Types
+        "XML Type Mismatch" => "📄",
+        "XML Features Lost" => "📋",
+        "JSON Type Mismatch" => "🔧",
+        "JSONB Recommended" => "⚡",
+        "Binary Type Mismatch" => "📦",
+        "Spatial Type Missing" => "🗺️",
+        "Spatial Type OK" => "📍",
+        
+        // Legacy/Deprecated
+        "Legacy LONG Type" => "⚠️",
+        "Deprecated Type" => "🚫",
+        "Deprecated Binary Type" => "🚫",
+        
+        // Critical Issues
+        "Empty String Handling" => "⚠️",
+        "External File Pointer" => "🔴",
+        "User-Defined Type" => "🔴",
+        
+        // Auto-increment
+        "Auto-Increment Missing" => "🔢",
+        "Auto-Increment OK" => "🔢",
+        
+        // Float/Precision
+        "Float Type Mismatch" => "🔢",
+        "Rounding Errors" => "≈",
+        "Float Precision" => "🎯",
+        
+        // Misc
+        "Boolean Conversion" => "✓",
+        "Unicode Support" => "🌐",
+        "Binary File Validation" => "📁",
+        
+        _ => "•"
+    };
 }

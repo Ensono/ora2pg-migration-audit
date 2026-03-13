@@ -29,7 +29,7 @@ public class SchemaComparisonMarkdownWriter
         sb.AppendLine("## Executive Summary");
         sb.AppendLine();
         
-        var statusIcon = result.HasCriticalIssues ? "❌" : "✅";
+        var statusIcon = result.HasCriticalIssues ? "\u274C" : "\u2705";  // ❌ : ✅
         var statusText = result.HasCriticalIssues ? "FAILED" : "PASSED";
         sb.AppendLine($"**Status:** {statusIcon} {statusText}");
         sb.AppendLine();
@@ -39,14 +39,20 @@ public class SchemaComparisonMarkdownWriter
         sb.AppendLine("| Object Type | Oracle | PostgreSQL | Match |");
         sb.AppendLine("|------------|--------|------------|-------|");
         
-        var tablesMatch = result.OracleLogicalTableCount == result.PostgresLogicalTableCount ? "✅" : "❌";
-        var columnsMatch = result.OracleLogicalColumnCount == result.PostgresLogicalColumnCount ? "✅" : "❌";
-        var pksMatch = result.OracleLogicalPrimaryKeyCount == result.PostgresLogicalPrimaryKeyCount ? "✅" : "❌";
-        var fksMatch = result.OracleLogicalForeignKeyCount == result.PostgresLogicalForeignKeyCount ? "✅" : "❌";
+        var tablesMatch = result.OracleLogicalTableCount == result.PostgresLogicalTableCount ? "\u2705" : "\u274C";  // ✅ : ❌
+        var columnsMatch = result.OracleLogicalColumnCount == result.PostgresLogicalColumnCount ? "\u2705" : "\u274C";  // ✅ : ❌
+        var pksMatch = result.OracleLogicalPrimaryKeyCount == result.PostgresLogicalPrimaryKeyCount ? "\u2705" : "\u274C";  // ✅ : ❌
+        var fksMatch = result.OracleLogicalForeignKeyCount == result.PostgresLogicalForeignKeyCount ? "\u2705" : "\u274C";  // ✅ : ❌
         
         sb.AppendLine($"| Tables | {result.OracleLogicalTableCount} | {result.PostgresLogicalTableCount} | {tablesMatch} |");
         sb.AppendLine($"| Columns | {result.OracleLogicalColumnCount} | {result.PostgresLogicalColumnCount} | {columnsMatch} |");
         sb.AppendLine($"| Primary Keys | {result.OracleLogicalPrimaryKeyCount} | {result.PostgresLogicalPrimaryKeyCount} | {pksMatch} |");
+        
+        if (result.SyntheticPrimaryKeyCount > 0)
+        {
+            sb.AppendLine($"| Synthetic PKs (DMS rowid) | 0 | {result.SyntheticPrimaryKeyCount} | \u26A0\uFE0F |");  // ⚠️
+        }
+        
         sb.AppendLine($"| Foreign Keys | {result.OracleLogicalForeignKeyCount} | {result.PostgresLogicalForeignKeyCount} | {fksMatch} |");
         sb.AppendLine();
 
@@ -72,7 +78,15 @@ public class SchemaComparisonMarkdownWriter
                 sb.AppendLine();
                 foreach (var issue in result.TableIssues)
                 {
-                    sb.AppendLine($"- {EscapeMarkdown(issue)}");
+                    var severity = GetIssueSeverity(issue);
+                    var badge = severity switch
+                    {
+                        "Critical" => "🔴 **CRITICAL**",
+                        "Warning" => "⚠️ **WARNING**",
+                        "Info" => "ℹ️ **INFO**",
+                        _ => ""
+                    };
+                    sb.AppendLine($"- {badge} {EscapeMarkdown(issue)}");
                 }
                 sb.AppendLine();
             }
@@ -83,7 +97,15 @@ public class SchemaComparisonMarkdownWriter
                 sb.AppendLine();
                 foreach (var issue in result.ConstraintIssues)
                 {
-                    sb.AppendLine($"- {EscapeMarkdown(issue)}");
+                    var severity = GetIssueSeverity(issue);
+                    var badge = severity switch
+                    {
+                        "Critical" => "🔴 **CRITICAL**",
+                        "Warning" => "⚠️ **WARNING**",
+                        "Info" => "ℹ️ **INFO**",
+                        _ => ""
+                    };
+                    sb.AppendLine($"- {badge} {EscapeMarkdown(issue)}");
                 }
                 sb.AppendLine();
             }
@@ -94,7 +116,15 @@ public class SchemaComparisonMarkdownWriter
                 sb.AppendLine();
                 foreach (var issue in result.IndexIssues)
                 {
-                    sb.AppendLine($"- {EscapeMarkdown(issue)}");
+                    var severity = GetIssueSeverity(issue);
+                    var badge = severity switch
+                    {
+                        "Critical" => "🔴 **CRITICAL**",
+                        "Warning" => "⚠️ **WARNING**",
+                        "Info" => "ℹ️ **INFO**",
+                        _ => ""
+                    };
+                    sb.AppendLine($"- {badge} {EscapeMarkdown(issue)}");
                 }
                 sb.AppendLine();
             }
@@ -105,16 +135,50 @@ public class SchemaComparisonMarkdownWriter
                 sb.AppendLine();
                 foreach (var issue in result.CodeObjectIssues)
                 {
-                    sb.AppendLine($"- {EscapeMarkdown(issue)}");
+                    var severity = GetIssueSeverity(issue);
+                    var badge = severity switch
+                    {
+                        "Critical" => "🔴 **CRITICAL**",
+                        "Warning" => "⚠️ **WARNING**",
+                        "Info" => "ℹ️ **INFO**",
+                        _ => ""
+                    };
+                    sb.AppendLine($"- {badge} {EscapeMarkdown(issue)}");
                 }
                 sb.AppendLine();
             }
         }
         else
         {
-            sb.AppendLine("## ✅ No Issues Found");
+            sb.AppendLine("## \u2705 No Issues Found");
             sb.AppendLine();
             sb.AppendLine("All schema objects have been successfully migrated from Oracle to PostgreSQL with no discrepancies.");
+            sb.AppendLine();
+        }
+
+        bool hasZeroCounts = result.OracleSchema.SequenceCount == 0 || result.OracleSchema.TriggerCount == 0 ||
+                             result.OracleSchema.ProcedureCount == 0 || result.OracleSchema.FunctionCount == 0;
+        
+        if (result.HasOracleExtractionErrors)
+        {
+            sb.AppendLine("---");
+            sb.AppendLine();
+            sb.AppendLine("## \u26A0\uFE0F Warning: Oracle Code Objects Extraction Errors");
+            sb.AppendLine();
+            sb.AppendLine("The following errors occurred while extracting Oracle code objects:");
+            sb.AppendLine();
+            foreach (var error in result.OracleExtractionErrors)
+            {
+                sb.AppendLine($"- `{error}`");
+            }
+            sb.AppendLine();
+            sb.AppendLine("These errors may occur due to:");
+            sb.AppendLine();
+            sb.AppendLine("- **User Permissions:** The database user may lack SELECT privileges on system views (`all_sequences`, `all_triggers`, `all_objects`).");
+            sb.AppendLine("- **Schema Scope:** Objects may exist in different schemas or be owned by system accounts.");
+            sb.AppendLine("- **Database Configuration:** Certain Oracle configurations or versions may restrict metadata access.");
+            sb.AppendLine();
+            sb.AppendLine("*Check application logs for detailed information and verify database permissions.*");
             sb.AppendLine();
         }
 
@@ -131,5 +195,13 @@ public class SchemaComparisonMarkdownWriter
             return text;
 
         return text.Replace("|", "\\|");
+    }
+
+    private string GetIssueSeverity(string issue)
+    {
+        if (issue.Contains("❌")) return "Critical";
+        if (issue.Contains("⚠️")) return "Warning";
+        if (issue.Contains("ℹ️") || issue.Contains("ℹ")) return "Info";
+        return "Info";
     }
 }

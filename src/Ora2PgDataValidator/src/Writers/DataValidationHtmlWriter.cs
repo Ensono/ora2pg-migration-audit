@@ -1,6 +1,7 @@
 using System.Text;
 using Ora2Pg.Common.Writers;
 using Ora2PgDataValidator.Comparison;
+using Ora2PgDataValidator.src;
 
 namespace Ora2PgDataValidator.src.Writers;
 
@@ -19,10 +20,12 @@ public class DataValidationHtmlWriter : BaseHtmlReportWriter
 
         sb.Append(GenerateHtmlHeader("Oracle to PostgreSQL Data Fingerprint Validation Report"));
 
-        int totalTables = results.Count;
-        int successfulTables = results.Count(r => !r.HasError && r.IsMatch);
-        int failedTables = results.Count(r => !r.HasError && !r.IsMatch);
-        int errorTables = results.Count(r => r.HasError);
+        int totalObjects = results.Count;
+        int totalTables = results.Count(r => r.ObjectType == DatabaseObjectType.Table);
+        int totalViews = results.Count(r => r.ObjectType == DatabaseObjectType.View);
+        int successfulObjects = results.Count(r => !r.HasError && r.IsMatch);
+        int failedObjects = results.Count(r => !r.HasError && !r.IsMatch);
+        int errorObjects = results.Count(r => r.HasError);
         long totalSourceRows = results.Sum(r => (long)r.SourceRowCount);
         long totalTargetRows = results.Sum(r => (long)r.TargetRowCount);
         long totalMatchingRows = results.Sum(r => (long)r.MatchingRows);
@@ -37,38 +40,40 @@ public class DataValidationHtmlWriter : BaseHtmlReportWriter
         var metadata = new Dictionary<string, string>
         {
             { "Validation Date", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") },
-            { "Total Tables Compared", totalTables.ToString("N0") },
+            { "Total Objects Compared", $"{totalObjects:N0} ({totalTables} tables, {totalViews} views)" },
             { "Overall Match Percentage", $"{overallMatchPercentage:F2}%" }
         };
         sb.Append(GenerateMetadataSection(metadata));
 
-        var status = errorTables > 0 ? "FAILED" : 
-                    failedTables > 0 ? "WARNING" : "PASSED";
+        var status = errorObjects > 0 ? "FAILED" : 
+                    failedObjects > 0 ? "WARNING" : "PASSED";
         sb.Append(GenerateStatusBadge(status));
 
         var summaryMetrics = new List<SummaryMetric>
         {
-            new("Total Tables", totalTables.ToString(), "📊", null),
-            new("Successful Matches", successfulTables.ToString(), 
-                successfulTables == totalTables ? "✅" : "🔴",
-                successfulTables == totalTables ? "match" : "mismatch"),
-            new("Failed Validations", failedTables.ToString(), 
-                failedTables == 0 ? "✅" : "❌",
-                failedTables == 0 ? "match" : "mismatch"),
-            new("Errors", errorTables.ToString(), 
-                errorTables == 0 ? "✅" : "🔴",
-                errorTables == 0 ? "match" : "mismatch"),
-            new("Total Source Rows", FormatNumber(totalSourceRows), "📈", null),
-            new("Total Target Rows", FormatNumber(totalTargetRows), "📊", null),
-            new("Matching Rows", FormatNumber(totalMatchingRows), "✅", "match"),
+            new("Total Objects", totalObjects.ToString(), "\U0001F4CA", null),  // 📊
+            new("Tables", totalTables.ToString(), "\U0001F4CB", null),  // 📋
+            new("Views", totalViews.ToString(), "\U0001F50D", null),  // 🔍
+            new("Successful Matches", successfulObjects.ToString(), 
+                successfulObjects == totalObjects ? "\u2705" : "\U0001F534",  // ✅ : 🔴
+                successfulObjects == totalObjects ? "match" : "mismatch"),
+            new("Failed Validations", failedObjects.ToString(), 
+                failedObjects == 0 ? "\u2705" : "\u274C",  // ✅ : ❌
+                failedObjects == 0 ? "match" : "mismatch"),
+            new("Errors", errorObjects.ToString(), 
+                errorObjects == 0 ? "\u2705" : "\U0001F534",  // ✅ : 🔴
+                errorObjects == 0 ? "match" : "mismatch"),
+            new("Total Source Rows", FormatNumber(totalSourceRows), "\U0001F4C8", null),  // 📈
+            new("Total Target Rows", FormatNumber(totalTargetRows), "\U0001F4CA", null),  // 📊
+            new("Matching Rows", FormatNumber(totalMatchingRows), "\u2705", "match"),  // ✅
             new("Mismatched Rows", FormatNumber(totalMismatchedRows), 
-                totalMismatchedRows == 0 ? "✅" : "❌",
+                totalMismatchedRows == 0 ? "\u2705" : "\u274C",  // ✅ : ❌
                 totalMismatchedRows == 0 ? "match" : "mismatch"),
             new("Missing in Target", FormatNumber(totalMissingRows), 
-                totalMissingRows == 0 ? "✅" : "⚠️",
+                totalMissingRows == 0 ? "\u2705" : "\u26A0\uFE0F",  // ✅ : ⚠️
                 totalMissingRows == 0 ? "match" : "warning"),
             new("Extra in Target", FormatNumber(totalExtraRows), 
-                totalExtraRows == 0 ? "✅" : "⚠️",
+                totalExtraRows == 0 ? "\u2705" : "\u26A0\uFE0F",  // ✅ : ⚠️
                 totalExtraRows == 0 ? "match" : "warning")
         };
         sb.Append(GenerateSummaryTable(summaryMetrics));
@@ -77,7 +82,8 @@ public class DataValidationHtmlWriter : BaseHtmlReportWriter
         sb.AppendLine("        <table>");
         sb.AppendLine("            <tr>");
         sb.AppendLine("                <th>Status</th>");
-        sb.AppendLine("                <th>Table Name</th>");
+        sb.AppendLine("                <th>Type</th>");
+        sb.AppendLine("                <th>Object Name</th>");
         sb.AppendLine("                <th style=\"text-align: right;\">Source Rows</th>");
         sb.AppendLine("                <th style=\"text-align: right;\">Target Rows</th>");
         sb.AppendLine("                <th style=\"text-align: right;\">Matching</th>");
@@ -99,8 +105,12 @@ public class DataValidationHtmlWriter : BaseHtmlReportWriter
             var statusText = result.HasError ? "Error" : 
                             result.IsMatch ? "Match" : "Mismatch";
             
+            var objectType = result.ObjectType == DatabaseObjectType.View ? "View" : "Table";
+            var objectIcon = result.ObjectType == DatabaseObjectType.View ? "\U0001F50D" : "\U0001F4CB";  // 🔍 vs 📋
+            
             sb.AppendLine($"            <tr class=\"{rowClass}\">");
             sb.AppendLine($"                <td>{statusIcon} {statusText}</td>");
+            sb.AppendLine($"                <td>{objectIcon} {objectType}</td>");
             sb.AppendLine($"                <td><strong>{EscapeHtml(result.SourceTable)}</strong></td>");
             sb.AppendLine($"                <td class=\"number\">{FormatNumber(result.SourceRowCount)}</td>");
             sb.AppendLine($"                <td class=\"number\">{FormatNumber(result.TargetRowCount)}</td>");
@@ -224,22 +234,22 @@ public class DataValidationHtmlWriter : BaseHtmlReportWriter
         sb.AppendLine("        </table>");
         
 
-        if (errorTables == 0 && failedTables == 0)
+        if (errorObjects == 0 && failedObjects == 0)
         {
             sb.AppendLine("        <div class=\"detail-box\">");
-            sb.AppendLine("            <p style=\"color: #28a745; font-size: 1.1em;\">✅ <strong>Perfect Match!</strong> All tables have matching data fingerprints.</p>");
+            sb.AppendLine("            <p style=\"color: #28a745; font-size: 1.1em;\">✅ <strong>Perfect Match!</strong> All objects have matching data fingerprints.</p>");
             sb.AppendLine("        </div>");
         }
-        else if (errorTables > 0)
+        else if (errorObjects > 0)
         {
             sb.AppendLine("        <div class=\"detail-box\" style=\"border-left-color: #dc3545;\">");
-            sb.AppendLine($"            <p style=\"color: #dc3545; font-size: 1.1em;\">🔴 <strong>Errors Detected!</strong> {errorTables} table(s) encountered errors during validation.</p>");
+            sb.AppendLine($"            <p style=\"color: #dc3545; font-size: 1.1em;\">🔴 <strong>Errors Detected!</strong> {errorObjects} object(s) encountered errors during validation.</p>");
             sb.AppendLine("        </div>");
         }
         else
         {
             sb.AppendLine("        <div class=\"detail-box\" style=\"border-left-color: #ffc107;\">");
-            sb.AppendLine($"            <p style=\"color: #856404; font-size: 1.1em;\">⚠️ <strong>Data Mismatches Found!</strong> {failedTables} table(s) have data integrity issues.</p>");
+            sb.AppendLine($"            <p style=\"color: #856404; font-size: 1.1em;\">⚠️ <strong>Data Mismatches Found!</strong> {failedObjects} object(s) have data integrity issues.</p>");
             sb.AppendLine("        </div>");
         }
 

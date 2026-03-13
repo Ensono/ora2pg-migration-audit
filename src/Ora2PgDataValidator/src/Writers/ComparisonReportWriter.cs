@@ -1,5 +1,6 @@
 using Ora2PgDataValidator.Comparison;
 using Ora2Pg.Common.Config;
+using Ora2PgDataValidator.src;
 
 namespace Ora2PgDataValidator.src.Writers;
 
@@ -52,10 +53,12 @@ public class ComparisonReportWriter
         writer.WriteLine(new string('=', ReportLineWidth));
         writer.WriteLine();
 
-        int totalTables = results.Count;
-        int successfulTables = 0;
-        int failedTables = 0;
-        int errorTables = 0;
+        int totalObjects = results.Count;
+        int totalTables = results.Count(r => r.ObjectType == DatabaseObjectType.Table);
+        int totalViews = results.Count(r => r.ObjectType == DatabaseObjectType.View);
+        int successfulObjects = 0;
+        int failedObjects = 0;
+        int errorObjects = 0;
         long totalSourceRows = 0;
         long totalTargetRows = 0;
         long totalMatchingRows = 0;
@@ -64,15 +67,15 @@ public class ComparisonReportWriter
         {
             if (result.HasError)
             {
-                errorTables++;
+                errorObjects++;
             }
             else if (result.IsMatch)
             {
-                successfulTables++;
+                successfulObjects++;
             }
             else
             {
-                failedTables++;
+                failedObjects++;
             }
 
             totalSourceRows += result.SourceRowCount;
@@ -80,10 +83,10 @@ public class ComparisonReportWriter
             totalMatchingRows += result.MatchingRows;
         }
 
-        writer.WriteLine($"Total Tables Compared:           {totalTables}");
-        writer.WriteLine($"  ✓ Successfully Validated:      {successfulTables}");
-        writer.WriteLine($"  ✗ Validation Failed:           {failedTables}");
-        writer.WriteLine($"  ⚠ Errors During Comparison:    {errorTables}");
+        writer.WriteLine($"Total Objects Compared:          {totalObjects} ({totalTables} tables, {totalViews} views)");
+        writer.WriteLine($"  ✓ Successfully Validated:      {successfulObjects}");
+        writer.WriteLine($"  ✗ Validation Failed:           {failedObjects}");
+        writer.WriteLine($"  ⚠ Errors During Comparison:    {errorObjects}");
         writer.WriteLine();
         writer.WriteLine($"Total Rows in Oracle:            {totalSourceRows:N0}");
         writer.WriteLine($"Total Rows in PostgreSQL:        {totalTargetRows:N0}");
@@ -101,15 +104,17 @@ public class ComparisonReportWriter
     private void WriteDetailedResults(StreamWriter writer, List<ComparisonResult> results)
     {
         writer.WriteLine(new string('=', ReportLineWidth));
-        writer.WriteLine("DETAILED RESULTS BY TABLE");
+        writer.WriteLine("DETAILED RESULTS BY OBJECT");
         writer.WriteLine(new string('=', ReportLineWidth));
         writer.WriteLine();
 
-        int tableNumber = 1;
+        int objectNumber = 1;
         foreach (var result in results)
         {
+            string objectType = result.ObjectType == DatabaseObjectType.View ? "View" : "Table";
+            
             writer.WriteLine(new string('-', ReportLineWidth));
-            writer.WriteLine($"Table {tableNumber}: {result.SourceTable} → {result.TargetTable}");
+            writer.WriteLine($"{objectType} {objectNumber}: {result.SourceTable} → {result.TargetTable}");
             writer.WriteLine(new string('-', ReportLineWidth));
 
             if (result.HasError)
@@ -209,7 +214,7 @@ public class ComparisonReportWriter
             }
 
             writer.WriteLine();
-            tableNumber++;
+            objectNumber++;
         }
     }
 

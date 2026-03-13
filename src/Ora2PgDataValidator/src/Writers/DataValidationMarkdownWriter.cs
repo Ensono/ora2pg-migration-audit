@@ -1,5 +1,6 @@
 using System.Text;
 using Ora2PgDataValidator.Comparison;
+using Ora2PgDataValidator.src;
 
 namespace Ora2PgDataValidator.src.Writers;
 
@@ -15,7 +16,9 @@ public class DataValidationMarkdownWriter
     {
         var sb = new StringBuilder();
 
-        var totalTables = results.Count;
+        var totalObjects = results.Count;
+        var totalTables = results.Count(r => r.ObjectType == DatabaseObjectType.Table);
+        var totalViews = results.Count(r => r.ObjectType == DatabaseObjectType.View);
         var successfulMatches = results.Count(r => !r.HasError && r.IsMatch);
         var failedMatches = results.Count(r => !r.HasError && !r.IsMatch);
         var errors = results.Count(r => r.HasError);
@@ -36,7 +39,7 @@ public class DataValidationMarkdownWriter
         sb.AppendLine("## Metadata");
         sb.AppendLine();
         sb.AppendLine($"- **Validation Date:** {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        sb.AppendLine($"- **Total Tables Compared:** {totalTables}");
+        sb.AppendLine($"- **Total Objects Compared:** {totalObjects} ({totalTables} tables, {totalViews} views)");
         sb.AppendLine($"- **Overall Match Percentage:** {overallMatchPercentage:F2}%");
         sb.AppendLine($"- **Status:** {statusIcon} {status}");
         sb.AppendLine();
@@ -45,28 +48,32 @@ public class DataValidationMarkdownWriter
         sb.AppendLine();
         sb.AppendLine("| Metric | Value |");
         sb.AppendLine("|--------|-------|");
-        sb.AppendLine($"| 📊 Total Tables | {totalTables} |");
-        sb.AppendLine($"| ✅ Successful Matches | {successfulMatches} |");
-        sb.AppendLine($"| ⚠️ Mismatches | {failedMatches} |");
-        sb.AppendLine($"| 🔴 Errors | {errors} |");
-        sb.AppendLine($"| 📈 Total Source Rows | {totalSourceRows:N0} |");
-        sb.AppendLine($"| 📉 Total Target Rows | {totalTargetRows:N0} |");
-        sb.AppendLine($"| ✔️ Matching Rows | {totalMatchingRows:N0} |");
+        sb.AppendLine($"| \U0001F4CA Total Objects | {totalObjects} |");  // 📊
+        sb.AppendLine($"| \U0001F4CB Tables | {totalTables} |");  // 📋
+        sb.AppendLine($"| \U0001F50D Views | {totalViews} |");  // 🔍
+        sb.AppendLine($"| \u2705 Successful Matches | {successfulMatches} |");  // ✅
+        sb.AppendLine($"| \u26A0\uFE0F Mismatches | {failedMatches} |");  // ⚠️
+        sb.AppendLine($"| \U0001F534 Errors | {errors} |");  // 🔴
+        sb.AppendLine($"| \U0001F4C8 Total Source Rows | {totalSourceRows:N0} |");  // 📈
+        sb.AppendLine($"| \U0001F4C9 Total Target Rows | {totalTargetRows:N0} |");  // 📉
+        sb.AppendLine($"| \u2714\uFE0F Matching Rows | {totalMatchingRows:N0} |");  // ✔️
         sb.AppendLine();
 
         sb.AppendLine("## Detailed Comparison Results");
         sb.AppendLine();
-        sb.AppendLine("| Status | Table | Source Rows | Target Rows | Matching | Mismatched | Missing | Extra | Match % |");
-        sb.AppendLine("|--------|-------|-------------|-------------|----------|------------|---------|-------|---------|");
+        sb.AppendLine("| Status | Type | Object | Source Rows | Target Rows | Matching | Mismatched | Missing | Extra | Match % |");
+        sb.AppendLine("|--------|------|--------|-------------|-------------|----------|------------|---------|-------|---------|");
 
         foreach (var result in results.OrderBy(r => r.IsMatch ? 0 : 1).ThenBy(r => r.SourceTable))
         {
-            var tableStatusIcon = result.HasError ? "🔴" : result.IsMatch ? "✅" : "⚠️";
+            var tableStatusIcon = result.HasError ? "\U0001F534" : result.IsMatch ? "\u2705" : "\u26A0\uFE0F";  // 🔴 : ✅ : ⚠️
+            var objectType = result.ObjectType == DatabaseObjectType.View ? "View" : "Table";
+            var objectIcon = result.ObjectType == DatabaseObjectType.View ? "\U0001F50D" : "\U0001F4CB";  // 🔍 vs 📋
 
             var matchPercentage = result.MatchPercentage;
 
             var tableName = !string.IsNullOrEmpty(result.TargetTable) ? result.TargetTable : result.SourceTable;
-            sb.AppendLine($"| {tableStatusIcon} | {EscapeMarkdown(tableName)} | {result.SourceRowCount:N0} | {result.TargetRowCount:N0} | {result.MatchingRows:N0} | {result.MismatchedRows:N0} | {result.MissingInTarget:N0} | {result.ExtraInTarget:N0} | {matchPercentage:F2}% |");
+            sb.AppendLine($"| {tableStatusIcon} | {objectIcon} {objectType} | {EscapeMarkdown(tableName)} | {result.SourceRowCount:N0} | {result.TargetRowCount:N0} | {result.MatchingRows:N0} | {result.MismatchedRows:N0} | {result.MissingInTarget:N0} | {result.ExtraInTarget:N0} | {matchPercentage:F2}% |");
         }
 
         sb.AppendLine();
@@ -79,8 +86,9 @@ public class DataValidationMarkdownWriter
 
             foreach (var result in tablesWithMismatches)
             {
+                var objectType = result.ObjectType == DatabaseObjectType.View ? "View" : "Table";
                 var tableName = !string.IsNullOrEmpty(result.TargetTable) ? result.TargetTable : result.SourceTable;
-                sb.AppendLine($"### {tableName}");
+                sb.AppendLine($"### {objectType}: {tableName}");
                 sb.AppendLine();
                 sb.AppendLine($"- **Source Rows:** {result.SourceRowCount:N0}");
                 sb.AppendLine($"- **Target Rows:** {result.TargetRowCount:N0}");
@@ -180,8 +188,9 @@ public class DataValidationMarkdownWriter
 
             foreach (var result in tablesWithErrors)
             {
+                var objectType = result.ObjectType == DatabaseObjectType.View ? "View" : "Table";
                 var tableName = !string.IsNullOrEmpty(result.TargetTable) ? result.TargetTable : result.SourceTable;
-                sb.AppendLine($"### {tableName}");
+                sb.AppendLine($"### {objectType}: {tableName}");
                 sb.AppendLine();
                 sb.AppendLine($"**Error Message:** {EscapeMarkdown(result.Error ?? "Unknown error")}");
                 sb.AppendLine();
@@ -192,7 +201,7 @@ public class DataValidationMarkdownWriter
         {
             sb.AppendLine("## ✅ Validation Successful");
             sb.AppendLine();
-            sb.AppendLine($"All {totalTables} tables have been successfully validated. Data fingerprints match between Oracle and PostgreSQL databases.");
+            sb.AppendLine($"All {totalObjects} objects ({totalTables} tables, {totalViews} views) have been successfully validated. Data fingerprints match between Oracle and PostgreSQL databases.");
             sb.AppendLine();
         }
 

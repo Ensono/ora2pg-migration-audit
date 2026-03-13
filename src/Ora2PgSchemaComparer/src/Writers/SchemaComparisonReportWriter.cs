@@ -47,7 +47,15 @@ public class SchemaComparisonReportWriter
             report.AppendLine("   Issues Found:");
             foreach (var issue in result.TableIssues)
             {
-                report.AppendLine($"     {issue}");
+                var severity = GetIssueSeverity(issue);
+                var prefix = severity switch
+                {
+                    "Critical" => "     [CRITICAL]",
+                    "Warning" => "     [WARNING] ",
+                    "Info" => "     [INFO]    ",
+                    _ => "     "
+                };
+                report.AppendLine($"{prefix} {issue}");
             }
             report.AppendLine();
         }
@@ -68,6 +76,12 @@ public class SchemaComparisonReportWriter
             $" Primary Keys:");
         report.AppendLine($"     Oracle:     {result.OracleLogicalPrimaryKeyCount} primary keys");
         report.AppendLine($"     PostgreSQL: {result.PostgresLogicalPrimaryKeyCount} primary keys");
+        
+        if (result.SyntheticPrimaryKeyCount > 0)
+        {
+            report.AppendLine($"     Synthetic:  {result.SyntheticPrimaryKeyCount} synthetic PKs (DMS rowid - expected)");
+        }
+        
         report.AppendLine();
         
         report.AppendLine("   " + GetCheckmark(result.OracleLogicalForeignKeyCount == result.PostgresLogicalForeignKeyCount) +
@@ -93,7 +107,15 @@ public class SchemaComparisonReportWriter
             report.AppendLine("   Issues Found:");
             foreach (var issue in result.ConstraintIssues)
             {
-                report.AppendLine($"     {issue}");
+                var severity = GetIssueSeverity(issue);
+                var prefix = severity switch
+                {
+                    "Critical" => "     [CRITICAL]",
+                    "Warning" => "     [WARNING] ",
+                    "Info" => "     [INFO]    ",
+                    _ => "     "
+                };
+                report.AppendLine($"{prefix} {issue}");
             }
             report.AppendLine();
         }
@@ -111,7 +133,15 @@ public class SchemaComparisonReportWriter
             report.AppendLine("   Issues Found:");
             foreach (var issue in result.IndexIssues)
             {
-                report.AppendLine($"     {issue}");
+                var severity = GetIssueSeverity(issue);
+                var prefix = severity switch
+                {
+                    "Critical" => "     [CRITICAL]",
+                    "Warning" => "     [WARNING] ",
+                    "Info" => "     [INFO]    ",
+                    _ => "     "
+                };
+                report.AppendLine($"{prefix} {issue}");
             }
             report.AppendLine();
         }
@@ -142,12 +172,16 @@ public class SchemaComparisonReportWriter
         report.AppendLine($"     PostgreSQL: {result.PostgresSchema.TriggerCount} triggers");
         report.AppendLine();
         
-        var oracleProcCount = result.OracleSchema.ProcedureCount + result.OracleSchema.FunctionCount;
-        var postgresProcCount = result.PostgresSchema.ProcedureCount + result.PostgresSchema.FunctionCount;
-        report.AppendLine("   " + GetCheckmark(oracleProcCount == postgresProcCount) +
-            $" Procedures/Functions:");
-        report.AppendLine($"     Oracle:     {oracleProcCount} procedures/functions");
-        report.AppendLine($"     PostgreSQL: {postgresProcCount} procedures/functions");
+        report.AppendLine("   " + GetCheckmark(result.OracleSchema.ProcedureCount == result.PostgresSchema.ProcedureCount) +
+            $" Procedures:");
+        report.AppendLine($"     Oracle:     {result.OracleSchema.ProcedureCount} procedures");
+        report.AppendLine($"     PostgreSQL: {result.PostgresSchema.ProcedureCount} procedures");
+        report.AppendLine();
+        
+        report.AppendLine("   " + GetCheckmark(result.OracleSchema.FunctionCount == result.PostgresSchema.FunctionCount) +
+            $" Functions:");
+        report.AppendLine($"     Oracle:     {result.OracleSchema.FunctionCount} functions");
+        report.AppendLine($"     PostgreSQL: {result.PostgresSchema.FunctionCount} functions");
         report.AppendLine();
         
         if (result.CodeObjectIssues.Any())
@@ -155,7 +189,15 @@ public class SchemaComparisonReportWriter
             report.AppendLine("   Issues Found:");
             foreach (var issue in result.CodeObjectIssues)
             {
-                report.AppendLine($"     {issue}");
+                var severity = GetIssueSeverity(issue);
+                var prefix = severity switch
+                {
+                    "Critical" => "     [CRITICAL]",
+                    "Warning" => "     [WARNING] ",
+                    "Info" => "     [INFO]    ",
+                    _ => "     "
+                };
+                report.AppendLine($"{prefix} {issue}");
             }
             report.AppendLine();
         }
@@ -181,6 +223,34 @@ public class SchemaComparisonReportWriter
             report.AppendLine("❌ Critical issues found - review and resolve before proceeding.");
         }
         
+        bool hasZeroCounts = result.OracleSchema.SequenceCount == 0 || result.OracleSchema.TriggerCount == 0 ||
+                             result.OracleSchema.ProcedureCount == 0 || result.OracleSchema.FunctionCount == 0;
+        
+        if (result.HasOracleExtractionErrors)
+        {
+            report.AppendLine();
+            report.AppendLine("================================================================================");
+            report.AppendLine("WARNING: ORACLE CODE OBJECTS EXTRACTION ERRORS");
+            report.AppendLine("================================================================================");
+            report.AppendLine();
+            report.AppendLine("The following errors occurred while extracting Oracle code objects:");
+            report.AppendLine();
+            foreach (var error in result.OracleExtractionErrors)
+            {
+                report.AppendLine($"  • {error}");
+            }
+            report.AppendLine();
+            report.AppendLine("These errors may occur due to:");
+            report.AppendLine();
+            report.AppendLine("  • User Permissions: Database user may lack SELECT privileges on system views");
+            report.AppendLine("    (all_sequences, all_triggers, all_objects)");
+            report.AppendLine("  • Schema Scope: Objects may exist in different schemas or system accounts");
+            report.AppendLine("  • Database Configuration: Oracle configuration may restrict metadata access");
+            report.AppendLine();
+            report.AppendLine("Check application logs for detailed information and verify database permissions.");
+        }
+        
+        report.AppendLine();
         report.AppendLine("================================================================================");
         
         return report.ToString();
@@ -189,5 +259,13 @@ public class SchemaComparisonReportWriter
     private string GetCheckmark(bool condition)
     {
         return condition ? "✓" : "⚠️";
+    }
+
+    private string GetIssueSeverity(string issue)
+    {
+        if (issue.Contains("❌")) return "Critical";
+        if (issue.Contains("⚠️")) return "Warning";
+        if (issue.Contains("ℹ️") || issue.Contains("ℹ")) return "Info";
+        return "Info";
     }
 }
