@@ -1,13 +1,14 @@
 -- List all sequences in the schema
 SELECT
-    sequencename as sequence_name,
-    min_value,
-    max_value,
-    increment_by,
-    last_value
+    sequence_name,
+    CAST(start_value AS BIGINT) as start_value,
+    CAST(increment AS BIGINT) as increment_by,
+    CAST(minimum_value AS BIGINT) as min_value,
+    CAST(maximum_value AS BIGINT) as max_value,
+    cycle_option
 FROM 
-    pg_sequences
+    information_schema.sequences
 WHERE 
-    schemaname = '{POSTGRES_SCHEMA}'
+    sequence_schema = '{POSTGRES_SCHEMA}'
 ORDER BY 
-    sequencename
+    sequence_name
