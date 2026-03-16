@@ -398,12 +398,16 @@ public class PostgresSchemaExtractor
             
             var tableExcluded = _objectFilter.IsTableExcluded(tableName, schemaName);
             var refTableExcluded = _objectFilter.IsTableExcluded(referencedTable, refSchema);
+            var fkIgnored = _objectFilter.IsObjectIgnored("foreignkey", constraintName, schemaName) ||
+                           _objectFilter.IsObjectIgnored("fk", constraintName, schemaName);
             
-            if (tableExcluded || refTableExcluded)
+            if (tableExcluded || refTableExcluded || fkIgnored)
             {
                 var reason = tableExcluded 
                     ? $"source table '{tableName}' excluded" 
-                    : $"referenced table '{referencedTable}' excluded";
+                    : refTableExcluded 
+                    ? $"referenced table '{referencedTable}' excluded"
+                    : "foreign key in IGNORED_OBJECTS";
                 excludedFKs.Add($"{constraintName} ({tableName} → {referencedTable}): {reason}");
                 _logger.Debug("Excluding FK {ConstraintName}: {Table} → {RefTable} ({Reason})", 
                     constraintName, tableName, referencedTable, reason);

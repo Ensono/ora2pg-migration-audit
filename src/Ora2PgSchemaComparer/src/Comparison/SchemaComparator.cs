@@ -166,7 +166,7 @@ public class SchemaComparator
             
             foreach (var missingFK in missingFKs)
             {
-                result.ConstraintIssues.Add($"❌ Missing FK: {missingFK.TableName}.{missingFK.ConstraintName} → {missingFK.ReferencedTableName}");
+                result.ConstraintIssues.Add($"⚠️ Missing FK: {missingFK.TableName}.{missingFK.ConstraintName} → {missingFK.ReferencedTableName}");
             }
             
             var oracleFKSet = new HashSet<string>(
@@ -178,7 +178,7 @@ public class SchemaComparator
             
             foreach (var extraFK in extraFKs)
             {
-                result.ConstraintIssues.Add($"➕ Extra FK in PostgreSQL: {extraFK.TableName}.{extraFK.ConstraintName} → {extraFK.ReferencedTableName}");
+                result.ConstraintIssues.Add($"⚠️ Extra FK in PostgreSQL: {extraFK.TableName}.{extraFK.ConstraintName} → {extraFK.ReferencedTableName}");
             }
         }
 

@@ -139,11 +139,28 @@ You can exclude tables and other schema objects from validation runs using two o
 TABLE_EXCLUSION_PATTERNS=_bk,_bkup,_tmp
 
 # Exclude specific objects by type (comma-separated key=value pairs)
-IGNORED_OBJECTS=table=ignored_table,procedure=ignored_sproc
+IGNORED_OBJECTS=table=ignored_table,procedure=ignored_sproc,foreignkey=FK_LEGACY
 ```
 
 **Supported ignored object keys:**
-`table`, `view`, `materialized_view`, `sequence`, `trigger`, `index`, `procedure`, `function`, `package`
+`table`, `view`, `materialized_view`, `sequence`, `trigger`, `index`, `procedure`, `function`, `package`, `foreignkey` (or `fk`)
+
+**Foreign Key Exclusions (Schema Comparer):**
+- Use `foreignkey=` or `fk=` to exclude specific foreign key constraints
+- Foreign key issues are reported as **⚠️ WARNINGS** (not critical), allowing migrations to proceed
+- Useful for:
+  - Known FK differences between environments
+  - FKs that will be added post-migration
+  - Legacy FKs that are intentionally different
+
+**Examples:**
+```dotenv
+# Exclude specific foreign keys
+IGNORED_OBJECTS=foreignkey=FK_USER_ROLE,fk=FK_DEPT_MGR
+
+# Combined exclusions
+IGNORED_OBJECTS=table=AUDIT_LOG;procedure=SP_OLD;foreignkey=FK_LEGACY,FK_DEPRECATED
+```
 
 ### 2. Build and Run
 
@@ -401,6 +418,8 @@ Schema object comparison tool for Oracle to PostgreSQL migrations following the 
 **Key Features:**
 - Compares tables, columns, and structure (including partitioning)
 - Validates constraints (PK, FK, Unique, Check, Not Null)
+  - **Foreign key mismatches reported as ⚠️ WARNINGS** (not critical) to allow migrations to proceed
+  - FKs can be excluded via `IGNORED_OBJECTS=foreignkey=FK_NAME` or `fk=FK_NAME`
 - Compares indexes (B-Tree, Unique, Function-based)
 - Validates database code (Views, Materialized Views, Sequences, Triggers, Procedures)
 - Generates P2.1 compliance checklist reports

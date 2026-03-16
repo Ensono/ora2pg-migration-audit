@@ -91,7 +91,16 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
 
             if (!string.IsNullOrEmpty(result.Notes))
             {
-                lines.Add($"**Notes:** {result.Notes}");
+                lines.Add($"**Notes:**");
+                lines.Add("");
+
+                foreach (var line in result.Notes.Split('\n'))
+                {
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        lines.Add(line);
+                    }
+                }
                 lines.Add("");
             }
 
@@ -194,7 +203,15 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
 
             if (!string.IsNullOrEmpty(result.Notes))
             {
-                lines.Add($"Notes: {result.Notes}");
+                lines.Add($"Notes:");
+
+                foreach (var line in result.Notes.Split('\n'))
+                {
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        lines.Add($"  {line}");
+                    }
+                }
                 lines.Add("");
             }
 
@@ -265,6 +282,13 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
                 perfDiffHtml = $"<div class='perf-diff'>Performance Difference: {result.PerformanceDifferencePercent:F1}%</div>";
             }
 
+            var notesHtml = "";
+            if (!string.IsNullOrEmpty(result.Notes))
+            {
+                var notesFormatted = result.Notes.Replace("\n", "<br>");
+                notesHtml = $"<div class='notes'><strong>Notes:</strong><br>{notesFormatted}</div>";
+            }
+
             return $@"
                 <div class='query-result {statusClass}'>
                     <h3>{statusIcon} {result.QueryName}</h3>
@@ -289,7 +313,7 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
                         </tr>
                     </table>
                     {perfDiffHtml}
-                    <div class='notes'><strong>Notes:</strong> {result.Notes}</div>
+                    {notesHtml}
                     {errorHtml}
                 </div>";
         }));
