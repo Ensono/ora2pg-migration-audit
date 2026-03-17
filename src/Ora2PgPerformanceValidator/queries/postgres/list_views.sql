@@ -2,13 +2,13 @@
 SELECT
     table_name as view_name,
     LENGTH(view_definition) as text_length,
-    CASE 
+    CASE
         WHEN is_updatable = 'NO' THEN 'YES'
         ELSE 'NO'
-    END as read_only
-FROM 
+        END as read_only
+FROM
     information_schema.views
-WHERE 
+WHERE
     table_schema = '{POSTGRES_SCHEMA}'
-ORDER BY 
+ORDER BY
     table_name

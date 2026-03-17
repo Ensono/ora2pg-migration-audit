@@ -61,14 +61,14 @@ $Projects = @(
         Description = "Data type mapping validation"
     },
     @{
+            Name = "DataValidator"
+            Path = "src/Ora2PgDataValidator/Ora2PgDataValidator.csproj"
+            Description = "Data integrity validation"
+    },
+    @{
         Name = "PerformanceValidator"
         Path = "src/Ora2PgPerformanceValidator/Ora2PgPerformanceValidator.csproj"
         Description = "Query performance validation"
-    },
-    @{
-        Name = "DataValidator"
-        Path = "src/Ora2PgDataValidator/Ora2PgDataValidator.csproj"
-        Description = "Data integrity validation"
     }
 )
 

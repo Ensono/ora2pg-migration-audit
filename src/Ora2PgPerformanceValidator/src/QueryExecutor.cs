@@ -81,15 +81,18 @@ public class QueryExecutor
         _logger.Information("Executing query pair: {QueryName}", queryName);
         
         var captureObjectNames = ShouldCaptureObjectNames(queryName);
+        var isAggregate = IsAggregateQuery(queryName);
 
         try
         {
-            var (execTime, rowCount, objectNames) = await ExecuteOracleQueryAsync(oracleQuery, captureObjectNames);
+            var (execTime, rowCount, objectNames) = await ExecuteOracleQueryAsync(oracleQuery, captureObjectNames, isAggregate);
             result.OracleExecuted = true;
             result.OracleExecutionTimeMs = execTime;
             result.OracleRowsAffected = rowCount;
             result.OracleObjectNames = objectNames;
-            _logger.Information("  Oracle: {Time:F2}ms, {Rows} rows", execTime, rowCount);
+            _logger.Information("  Oracle: {Time:F2}ms, {Rows} rows{Objects}", 
+                execTime, rowCount, 
+                captureObjectNames ? $", captured {objectNames.Count} object names" : "");
         }
         catch (Exception ex)
         {
@@ -100,12 +103,14 @@ public class QueryExecutor
 
         try
         {
-            var (execTime, rowCount, objectNames) = await ExecutePostgresQueryAsync(postgresQuery, captureObjectNames);
+            var (execTime, rowCount, objectNames) = await ExecutePostgresQueryAsync(postgresQuery, captureObjectNames, isAggregate);
             result.PostgresExecuted = true;
             result.PostgresExecutionTimeMs = execTime;
             result.PostgresRowsAffected = rowCount;
             result.PostgresObjectNames = objectNames;
-            _logger.Information("  PostgreSQL: {Time:F2}ms, {Rows} rows", execTime, rowCount);
+            _logger.Information("  PostgreSQL: {Time:F2}ms, {Rows} rows{Objects}", 
+                execTime, rowCount,
+                captureObjectNames ? $", captured {objectNames.Count} object names" : "");
         }
         catch (Exception ex)
         {
@@ -124,7 +129,14 @@ public class QueryExecutor
         return IsIndexQuery(queryName) || IsSequenceQuery(queryName) || IsConstraintQuery(queryName);
     }
 
-    private async Task<(double executionTimeMs, long rowCount, List<string> objectNames)> ExecuteOracleQueryAsync(string query, bool captureObjectNames = false)
+    private bool IsAggregateQuery(string queryName)
+    {
+        // Queries that return a single row with an aggregate COUNT value
+        return queryName.Contains("count", StringComparison.OrdinalIgnoreCase) ||
+               queryName.Contains("02_count_tables", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<(double executionTimeMs, long rowCount, List<string> objectNames)> ExecuteOracleQueryAsync(string query, bool captureObjectNames = false, bool isAggregateQuery = false)
     {
         await using var conn = new OracleConnection(_oracleConnectionString);
         await conn.OpenAsync();
@@ -176,6 +188,15 @@ public class QueryExecutor
             
             while (await reader.ReadAsync())
             {
+                // For aggregate queries (COUNT queries), read the value from first column instead of counting rows
+                if (isAggregateQuery && i == 0 && reader.FieldCount > 0 && !reader.IsDBNull(0))
+                {
+                    // Read the aggregate value (e.g., COUNT(*))
+                    currentRowCount = Convert.ToInt64(reader.GetValue(0));
+                    _logger.Debug("Oracle - Read aggregate value: {Count}", currentRowCount);
+                    break; // Only need the first row for aggregate queries
+                }
+                
                 // If query returns table names, filter using ObjectFilter
                 if (tableNameColumnIndex.HasValue)
                 {
@@ -198,8 +219,21 @@ public class QueryExecutor
 
                 if (captureObjectNames && i == 0 && reader.FieldCount > 0)
                 {
-                    var objectName = reader.GetString(0);
-                    objectNames.Add(objectName);
+                    try
+                    {
+                        // Try to read the first column as a string for object names
+                        // Handle various data types that might not convert directly to string
+                        object value = reader.GetValue(0);
+                        var objectName = value?.ToString() ?? string.Empty;
+                        if (!string.IsNullOrEmpty(objectName))
+                        {
+                            objectNames.Add(objectName);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Debug("Could not read object name from first column: {Error}", ex.Message);
+                    }
                 }
                 
                 currentRowCount++;
@@ -218,10 +252,16 @@ public class QueryExecutor
         return (GetMedian(times), rowCount, objectNames);
     }
 
-    private async Task<(double executionTimeMs, long rowCount, List<string> objectNames)> ExecutePostgresQueryAsync(string query, bool captureObjectNames = false)
+    private async Task<(double executionTimeMs, long rowCount, List<string> objectNames)> ExecutePostgresQueryAsync(string query, bool captureObjectNames = false, bool isAggregateQuery = false)
     {
         await using var conn = new NpgsqlConnection(_postgresConnectionString);
         await conn.OpenAsync();
+        
+        // Set search_path to include the target schema
+        await using (var setPathCmd = new NpgsqlCommand($"SET search_path TO {_postgresSchema}, public", conn))
+        {
+            await setPathCmd.ExecuteNonQueryAsync();
+        }
         
         for (int i = 0; i < _warmupRuns; i++)
         {
@@ -292,8 +332,21 @@ public class QueryExecutor
 
                 if (captureObjectNames && i == 0 && reader.FieldCount > 0)
                 {
-                    var objectName = reader.GetString(0);
-                    objectNames.Add(objectName);
+                    try
+                    {
+                        // Try to read the first column as a string for object names
+                        // Handle various data types that might not convert directly to string
+                        object value = reader.GetValue(0);
+                        var objectName = value?.ToString() ?? string.Empty;
+                        if (!string.IsNullOrEmpty(objectName))
+                        {
+                            objectNames.Add(objectName);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Debug("Could not read object name from first column: {Error}", ex.Message);
+                    }
                 }
                 
                 currentRowCount++;
