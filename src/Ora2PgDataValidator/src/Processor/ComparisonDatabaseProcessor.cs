@@ -31,7 +31,7 @@ public class ComparisonDatabaseProcessor
     }
 
 
-    public void ProcessAndCompareTables(Dictionary<string, string> tableMapping)
+    public (List<ComparisonResult> Results, int SuccessCount, int FailCount) ProcessAndCompareTables(Dictionary<string, string> tableMapping, string schemaName = "")
     {
         Log.Information("");
         Log.Information(new string('=', 80));
@@ -43,7 +43,7 @@ public class ComparisonDatabaseProcessor
             Log.Error("✗ No tables specified for comparison");
             Log.Error("  Set TABLES_TO_COMPARE in .env file");
             Log.Error("  Format: ORACLE_SCHEMA.TABLE=postgres_schema.table");
-            return;
+            return (new List<ComparisonResult>(), 0, 0);
         }
 
         Log.Information("Tables to compare: {Count}", tableMapping.Count);
@@ -111,7 +111,11 @@ public class ComparisonDatabaseProcessor
             var reportsDir = props.GetReportsDirectory("Ora2PgDataValidator");
 
             var schemaPrefix = "";
-            if (tableMapping.Any())
+            if (!string.IsNullOrWhiteSpace(schemaName))
+            {
+                schemaPrefix = $"{schemaName.ToLower()}-";
+            }
+            else if (tableMapping.Any())
             {
                 var firstOracleTable = tableMapping.First().Key;
                 if (firstOracleTable.Contains('.'))
@@ -143,10 +147,12 @@ public class ComparisonDatabaseProcessor
         Log.Information(new string('=', 80));
         Log.Information("CSV hash files are available in the reports/ folder for manual review");
         Log.Information(new string('=', 80));
+        
+        return (allResults, successCount, failCount);
     }
 
 
-    public void ProcessAndCompareObjects(Dictionary<string, (string targetObject, DatabaseObjectType objectType)> objectMapping)
+    public void ProcessAndCompareObjects(Dictionary<string, (string targetObject, DatabaseObjectType objectType)> objectMapping, string schemaName = "")
     {
         Log.Information("");
         Log.Information(new string('=', 80));
@@ -231,7 +237,11 @@ public class ComparisonDatabaseProcessor
             var reportsDir = props.GetReportsDirectory("Ora2PgDataValidator");
 
             var schemaPrefix = "";
-            if (objectMapping.Any())
+            if (!string.IsNullOrWhiteSpace(schemaName))
+            {
+                schemaPrefix = $"{schemaName.ToLower()}-";
+            }
+            else if (objectMapping.Any())
             {
                 var firstSourceObject = objectMapping.First().Key;
                 if (firstSourceObject.Contains('.'))

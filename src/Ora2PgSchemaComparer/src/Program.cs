@@ -64,6 +64,7 @@ try
     var postgresExtractor = new PostgresSchemaExtractor(postgresManager);
 
     var allComparisonResults = new List<ComparisonResult>();
+    var allSchemaResults = new List<(string OracleSchema, string PostgresSchema, ComparisonResult Result)>();
     var comparator = new SchemaComparator();
 
     for (int i = 0; i < oracleSchemas.Length; i++)
@@ -86,6 +87,7 @@ try
         Log.Information("Comparing schemas...");
         var comparisonResult = comparator.Compare(oracleSchemaDefinition, postgresSchemaDefinition);
         allComparisonResults.Add(comparisonResult);
+        allSchemaResults.Add((oracleSchema, postgresSchema, comparisonResult));
 
         Log.Information("✓ Schema pair comparison complete: {TotalIssues} issues found", comparisonResult.TotalIssues);
     }
@@ -139,6 +141,12 @@ try
 
     Console.WriteLine();
     Console.WriteLine(allReportsText.ToString());
+
+    if (oracleSchemas.Length > 1)
+    {
+        var summaryWriter = new MultiSchemaSummaryWriter();
+        summaryWriter.WriteSummaryReport(allSchemaResults, reportsDir, timestamp);
+    }
 
     if (oracleSchemas.Length > 1)
     {

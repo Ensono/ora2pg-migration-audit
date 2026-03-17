@@ -433,24 +433,33 @@ public class QueryExecutor
             return;
         }
 
-        var maxTime = Math.Max(result.OracleExecutionTimeMs, result.PostgresExecutionTimeMs);
-        var minTime = Math.Min(result.OracleExecutionTimeMs, result.PostgresExecutionTimeMs);
-        
-        if (maxTime > 0)
+        if (result.OracleExecutionTimeMs > 0)
         {
-            result.PerformanceDifferencePercent = ((maxTime - minTime) / maxTime) * 100;
+            result.PerformanceDifferencePercent = 
+                ((result.PostgresExecutionTimeMs - result.OracleExecutionTimeMs) / result.OracleExecutionTimeMs) * 100;
         }
 
-        if (result.PerformanceDifferencePercent < _thresholdPercent)
+        if (result.PerformanceDifferencePercent <= 0)
         {
             result.Status = PerformanceStatus.Passed;
-            result.Notes = "Performance within acceptable range";
+            if (result.PerformanceDifferencePercent < 0)
+            {
+                result.Notes = $"PostgreSQL is {Math.Abs(result.PerformanceDifferencePercent):F1}% faster than Oracle ✓";
+            }
+            else
+            {
+                result.Notes = "Performance equivalent between Oracle and PostgreSQL";
+            }
+        }
+        else if (result.PerformanceDifferencePercent < _thresholdPercent)
+        {
+            result.Status = PerformanceStatus.Passed;
+            result.Notes = $"PostgreSQL is {result.PerformanceDifferencePercent:F1}% slower but within acceptable range ({_thresholdPercent}%)";
         }
         else
         {
             result.Status = PerformanceStatus.Warning;
-            var slower = result.OracleExecutionTimeMs > result.PostgresExecutionTimeMs ? "Oracle" : "PostgreSQL";
-            result.Notes = $"Significant performance difference: {slower} is {result.PerformanceDifferencePercent:F1}% slower";
+            result.Notes = $"PostgreSQL is {result.PerformanceDifferencePercent:F1}% slower than Oracle (threshold: {_thresholdPercent}%)";
         }
     }
 
