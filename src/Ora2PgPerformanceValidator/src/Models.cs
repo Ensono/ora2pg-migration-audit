@@ -15,6 +15,9 @@ public class QueryPerformanceResult
     public double PerformanceDifferencePercent { get; set; }
     public PerformanceStatus Status { get; set; }
     public string? Notes { get; set; }
+    
+    public List<string> OracleObjectNames { get; set; } = new List<string>();
+    public List<string> PostgresObjectNames { get; set; } = new List<string>();
 }
 
 public enum PerformanceStatus

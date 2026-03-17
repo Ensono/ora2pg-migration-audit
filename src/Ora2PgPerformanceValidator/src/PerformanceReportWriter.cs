@@ -8,6 +8,22 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
 {
     private readonly ILogger _logger = Log.ForContext<PerformanceReportWriter>();
 
+    private static string GetPerformanceIndicator(double perfDiff, double threshold)
+    {
+        if (perfDiff < 0)
+        {
+            return "✓ faster";
+        }
+        else if (perfDiff <= threshold)
+        {
+            return "≈ slower (within threshold)";
+        }
+        else
+        {
+            return "⚠ slower";
+        }
+    }
+
     public void WriteConsoleReport(PerformanceTestSummary summary)
     {
         _logger.Information("");
@@ -24,6 +40,69 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
         _logger.Information("Average Execution Time:");
         _logger.Information("  Oracle: {OracleAvg:F2}ms", summary.AverageOracleExecutionTimeMs);
         _logger.Information("  PostgreSQL: {PostgresAvg:F2}ms", summary.AveragePostgresExecutionTimeMs);
+        
+        // Calculate performance difference
+        if (summary.AverageOracleExecutionTimeMs > 0)
+        {
+            var perfDiff = ((summary.AveragePostgresExecutionTimeMs - summary.AverageOracleExecutionTimeMs) / 
+                           summary.AverageOracleExecutionTimeMs) * 100;
+            var indicator = GetPerformanceIndicator(perfDiff, summary.ThresholdPercent);
+            _logger.Information("  PostgreSQL vs Oracle: {Diff:F1}% {Indicator}", Math.Abs(perfDiff), indicator);
+        }
+        
+        _logger.Information("");
+        
+        // Table performance breakdown
+        var tableQueries = summary.Results.Where(r => 
+            r.QueryName.StartsWith("table_count_") ||
+            r.QueryName.StartsWith("table_sample_") ||
+            r.QueryName.StartsWith("table_pk_lookup_") ||
+            r.QueryName.StartsWith("table_ordered_")).ToList();
+        
+        if (tableQueries.Any())
+        {
+            _logger.Information("Table Performance Tests:");
+            _logger.Information("  Total: {Count}", tableQueries.Count);
+            _logger.Information("  ✓ Passed: {Passed}", tableQueries.Count(q => q.Status == PerformanceStatus.Passed));
+            _logger.Information("  ⚠ Warning: {Warning}", tableQueries.Count(q => q.Status == PerformanceStatus.Warning));
+            _logger.Information("  ❌ Failed: {Failed}", tableQueries.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch));
+            
+            // Breakdown by test type
+            var countTests = tableQueries.Where(q => q.QueryName.StartsWith("table_count_")).ToList();
+            var sampleTests = tableQueries.Where(q => q.QueryName.StartsWith("table_sample_")).ToList();
+            var pkTests = tableQueries.Where(q => q.QueryName.StartsWith("table_pk_lookup_")).ToList();
+            var orderedTests = tableQueries.Where(q => q.QueryName.StartsWith("table_ordered_")).ToList();
+            
+            _logger.Information("");
+            _logger.Information("  By Test Type:");
+            if (countTests.Any()) _logger.Information("    COUNT tests: {Count}", countTests.Count);
+            if (sampleTests.Any()) _logger.Information("    SAMPLE tests: {Count}", sampleTests.Count);
+            if (pkTests.Any()) _logger.Information("    PK LOOKUP tests: {Count}", pkTests.Count);
+            if (orderedTests.Any()) _logger.Information("    ORDERED SCAN tests: {Count}", orderedTests.Count);
+            
+            // Show slowest tables
+            var slowTables = tableQueries
+                .Where(q => q.OracleExecuted && q.PostgresExecuted && q.PostgresExecutionTimeMs > q.OracleExecutionTimeMs)
+                .OrderByDescending(q => q.PostgresExecutionTimeMs - q.OracleExecutionTimeMs)
+                .Take(5)
+                .ToList();
+            
+            if (slowTables.Any())
+            {
+                _logger.Information("");
+                _logger.Information("  Slowest Queries in PostgreSQL:");
+                foreach (var query in slowTables)
+                {
+                    var diff = ((query.PostgresExecutionTimeMs - query.OracleExecutionTimeMs) / query.OracleExecutionTimeMs) * 100;
+                    _logger.Information("    {Query}: +{Diff:F1}% slower ({PgTime:F2}ms vs {OraTime:F2}ms)", 
+                        query.QueryName.Replace("table_", ""), 
+                        diff, 
+                        query.PostgresExecutionTimeMs, 
+                        query.OracleExecutionTimeMs);
+                }
+            }
+        }
+        
         _logger.Information("");
         _logger.Information("ℹ️  Performance Threshold: >{Threshold}% difference = Warning", summary.ThresholdPercent);
         _logger.Information("═══════════════════════════════════════════════════════════");
@@ -52,9 +131,117 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
         lines.Add($"| ❌ Failed | {summary.FailedQueries} |");
         lines.Add($"| 🔴 Row Count Mismatch | {summary.RowCountMismatchQueries} |");
         lines.Add("");
-        lines.Add($"| Average Oracle Time | {summary.AverageOracleExecutionTimeMs:F2}ms |");
-        lines.Add($"| Average PostgreSQL Time | {summary.AveragePostgresExecutionTimeMs:F2}ms |");
-        lines.Add("");
+        
+        // Performance comparison
+        if (summary.AverageOracleExecutionTimeMs > 0)
+        {
+            var perfDiff = ((summary.AveragePostgresExecutionTimeMs - summary.AverageOracleExecutionTimeMs) / 
+                           summary.AverageOracleExecutionTimeMs) * 100;
+            var indicator = GetPerformanceIndicator(perfDiff, summary.ThresholdPercent);
+            lines.Add("| **Performance Metric** | **Value** |");
+            lines.Add("|------------------------|-----------|");
+            lines.Add($"| Average Oracle Time | {summary.AverageOracleExecutionTimeMs:F2}ms |");
+            lines.Add($"| Average PostgreSQL Time | {summary.AveragePostgresExecutionTimeMs:F2}ms |");
+            lines.Add($"| **PostgreSQL vs Oracle** | **{Math.Abs(perfDiff):F1}% {indicator}** |");
+            lines.Add("");
+        }
+        else
+        {
+            lines.Add($"| Average Oracle Time | {summary.AverageOracleExecutionTimeMs:F2}ms |");
+            lines.Add($"| Average PostgreSQL Time | {summary.AveragePostgresExecutionTimeMs:F2}ms |");
+            lines.Add("");
+        }
+        
+        // Table performance breakdown
+        var tableQueries = summary.Results.Where(r => 
+            r.QueryName.StartsWith("table_count_") ||
+            r.QueryName.StartsWith("table_sample_") ||
+            r.QueryName.StartsWith("table_pk_lookup_") ||
+            r.QueryName.StartsWith("table_ordered_")).ToList();
+        
+        if (tableQueries.Any())
+        {
+            lines.Add("## Table Performance Tests");
+            lines.Add("");
+            lines.Add("| Test Type | Total | Passed | Warning | Failed |");
+            lines.Add("|-----------|-------|--------|---------|--------|");
+            
+            var countTests = tableQueries.Where(q => q.QueryName.StartsWith("table_count_")).ToList();
+            var sampleTests = tableQueries.Where(q => q.QueryName.StartsWith("table_sample_")).ToList();
+            var pkTests = tableQueries.Where(q => q.QueryName.StartsWith("table_pk_lookup_")).ToList();
+            var orderedTests = tableQueries.Where(q => q.QueryName.StartsWith("table_ordered_")).ToList();
+            
+            if (countTests.Any())
+                lines.Add($"| COUNT (Full Scan) | {countTests.Count} | {countTests.Count(q => q.Status == PerformanceStatus.Passed)} | {countTests.Count(q => q.Status == PerformanceStatus.Warning)} | {countTests.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch)} |");
+            
+            if (sampleTests.Any())
+                lines.Add($"| SAMPLE (LIMIT) | {sampleTests.Count} | {sampleTests.Count(q => q.Status == PerformanceStatus.Passed)} | {sampleTests.Count(q => q.Status == PerformanceStatus.Warning)} | {sampleTests.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch)} |");
+            
+            if (pkTests.Any())
+                lines.Add($"| PK LOOKUP (Index) | {pkTests.Count} | {pkTests.Count(q => q.Status == PerformanceStatus.Passed)} | {pkTests.Count(q => q.Status == PerformanceStatus.Warning)} | {pkTests.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch)} |");
+            
+            if (orderedTests.Any())
+                lines.Add($"| ORDERED SCAN (Sort) | {orderedTests.Count} | {orderedTests.Count(q => q.Status == PerformanceStatus.Passed)} | {orderedTests.Count(q => q.Status == PerformanceStatus.Warning)} | {orderedTests.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch)} |");
+            
+            lines.Add($"| **TOTAL** | **{tableQueries.Count}** | **{tableQueries.Count(q => q.Status == PerformanceStatus.Passed)}** | **{tableQueries.Count(q => q.Status == PerformanceStatus.Warning)}** | **{tableQueries.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch)}** |");
+            lines.Add("");
+            
+            // Top 10 slowest tables
+            var slowTables = tableQueries
+                .Where(q => q.OracleExecuted && q.PostgresExecuted && q.PostgresExecutionTimeMs > q.OracleExecutionTimeMs)
+                .OrderByDescending(q => q.PostgresExecutionTimeMs - q.OracleExecutionTimeMs)
+                .Take(10)
+                .ToList();
+            
+            if (slowTables.Any())
+            {
+                lines.Add("### Top 10 Slowest Queries in PostgreSQL");
+                lines.Add("");
+                lines.Add("| Query | Oracle Time | PostgreSQL Time | Difference | Status |");
+                lines.Add("|-------|-------------|-----------------|------------|--------|");
+                
+                foreach (var query in slowTables)
+                {
+                    var diff = ((query.PostgresExecutionTimeMs - query.OracleExecutionTimeMs) / query.OracleExecutionTimeMs) * 100;
+                    var statusIcon = query.Status switch
+                    {
+                        PerformanceStatus.Passed => "✓",
+                        PerformanceStatus.Warning => "⚠",
+                        _ => "❌"
+                    };
+                    lines.Add($"| {query.QueryName.Replace("table_", "")} | {query.OracleExecutionTimeMs:F2}ms | {query.PostgresExecutionTimeMs:F2}ms | +{diff:F1}% | {statusIcon} |");
+                }
+                lines.Add("");
+            }
+            
+            // Top 10 fastest tables
+            var fastTables = tableQueries
+                .Where(q => q.OracleExecuted && q.PostgresExecuted && q.PostgresExecutionTimeMs < q.OracleExecutionTimeMs)
+                .OrderBy(q => q.PostgresExecutionTimeMs - q.OracleExecutionTimeMs)
+                .Take(10)
+                .ToList();
+            
+            if (fastTables.Any())
+            {
+                lines.Add("### Top 10 Fastest Queries in PostgreSQL");
+                lines.Add("");
+                lines.Add("| Query | Oracle Time | PostgreSQL Time | Improvement | Status |");
+                lines.Add("|-------|-------------|-----------------|-------------|--------|");
+                
+                foreach (var query in fastTables)
+                {
+                    var diff = ((query.OracleExecutionTimeMs - query.PostgresExecutionTimeMs) / query.OracleExecutionTimeMs) * 100;
+                    var statusIcon = query.Status switch
+                    {
+                        PerformanceStatus.Passed => "✓",
+                        PerformanceStatus.Warning => "⚠",
+                        _ => "❌"
+                    };
+                    lines.Add($"| {query.QueryName.Replace("table_", "")} | {query.OracleExecutionTimeMs:F2}ms | {query.PostgresExecutionTimeMs:F2}ms | -{diff:F1}% | {statusIcon} |");
+                }
+                lines.Add("");
+            }
+        }
 
         // Detailed results
         lines.Add("## Query Results");
@@ -91,7 +278,16 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
 
             if (!string.IsNullOrEmpty(result.Notes))
             {
-                lines.Add($"**Notes:** {result.Notes}");
+                lines.Add($"**Notes:**");
+                lines.Add("");
+
+                foreach (var line in result.Notes.Split('\n'))
+                {
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        lines.Add(line);
+                    }
+                }
                 lines.Add("");
             }
 
@@ -150,7 +346,109 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
         lines.Add("Average Execution Time:");
         lines.Add($"  Oracle:     {summary.AverageOracleExecutionTimeMs:F2}ms");
         lines.Add($"  PostgreSQL: {summary.AveragePostgresExecutionTimeMs:F2}ms");
+        
+        // Performance comparison
+        if (summary.AverageOracleExecutionTimeMs > 0)
+        {
+            var perfDiff = ((summary.AveragePostgresExecutionTimeMs - summary.AverageOracleExecutionTimeMs) / 
+                           summary.AverageOracleExecutionTimeMs) * 100;
+            var indicator = GetPerformanceIndicator(perfDiff, summary.ThresholdPercent);
+            lines.Add($"  Difference: {Math.Abs(perfDiff):F1}% {indicator}");
+        }
         lines.Add("");
+
+        // Table performance breakdown
+        var tableQueries = summary.Results.Where(r => 
+            r.QueryName.StartsWith("table_count_") ||
+            r.QueryName.StartsWith("table_sample_") ||
+            r.QueryName.StartsWith("table_pk_lookup_") ||
+            r.QueryName.StartsWith("table_ordered_")).ToList();
+
+        if (tableQueries.Any())
+        {
+            lines.Add("═══════════════════════════════════════════════════════════");
+            lines.Add("  TABLE PERFORMANCE TESTS");
+            lines.Add("═══════════════════════════════════════════════════════════");
+            lines.Add("");
+            
+            var countTests = tableQueries.Where(q => q.QueryName.StartsWith("table_count_")).ToList();
+            var sampleTests = tableQueries.Where(q => q.QueryName.StartsWith("table_sample_")).ToList();
+            var pkTests = tableQueries.Where(q => q.QueryName.StartsWith("table_pk_lookup_")).ToList();
+            var orderedTests = tableQueries.Where(q => q.QueryName.StartsWith("table_ordered_")).ToList();
+            
+            lines.Add("Test Type              Total    Passed   Warning  Failed");
+            lines.Add("───────────────────────────────────────────────────────────");
+            
+            if (countTests.Any())
+                lines.Add($"{"COUNT (Full Scan)",-20}   {countTests.Count,-6}   {countTests.Count(q => q.Status == PerformanceStatus.Passed),-6}   {countTests.Count(q => q.Status == PerformanceStatus.Warning),-6}   {countTests.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch),-6}");
+            
+            if (sampleTests.Any())
+                lines.Add($"{"SAMPLE (LIMIT)",-20}   {sampleTests.Count,-6}   {sampleTests.Count(q => q.Status == PerformanceStatus.Passed),-6}   {sampleTests.Count(q => q.Status == PerformanceStatus.Warning),-6}   {sampleTests.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch),-6}");
+            
+            if (pkTests.Any())
+                lines.Add($"{"PK LOOKUP (Index)",-20}   {pkTests.Count,-6}   {pkTests.Count(q => q.Status == PerformanceStatus.Passed),-6}   {pkTests.Count(q => q.Status == PerformanceStatus.Warning),-6}   {pkTests.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch),-6}");
+            
+            if (orderedTests.Any())
+                lines.Add($"{"ORDERED SCAN (Sort)",-20}   {orderedTests.Count,-6}   {orderedTests.Count(q => q.Status == PerformanceStatus.Passed),-6}   {orderedTests.Count(q => q.Status == PerformanceStatus.Warning),-6}   {orderedTests.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch),-6}");
+            
+            lines.Add("───────────────────────────────────────────────────────────");
+            lines.Add($"{"TOTAL",-20}   {tableQueries.Count,-6}   {tableQueries.Count(q => q.Status == PerformanceStatus.Passed),-6}   {tableQueries.Count(q => q.Status == PerformanceStatus.Warning),-6}   {tableQueries.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch),-6}");
+            lines.Add("");
+            
+            // Top 10 slowest tables
+            var slowTables = tableQueries
+                .Where(q => q.OracleExecuted && q.PostgresExecuted && q.PostgresExecutionTimeMs > q.OracleExecutionTimeMs)
+                .OrderByDescending(q => q.PostgresExecutionTimeMs - q.OracleExecutionTimeMs)
+                .Take(10)
+                .ToList();
+            
+            if (slowTables.Any())
+            {
+                lines.Add("TOP 10 SLOWEST QUERIES IN POSTGRESQL");
+                lines.Add("───────────────────────────────────────────────────────────");
+                foreach (var query in slowTables)
+                {
+                    var diff = ((query.PostgresExecutionTimeMs - query.OracleExecutionTimeMs) / query.OracleExecutionTimeMs) * 100;
+                    var statusIcon = query.Status switch
+                    {
+                        PerformanceStatus.Passed => "✓",
+                        PerformanceStatus.Warning => "⚠",
+                        _ => "❌"
+                    };
+                    var queryName = query.QueryName.Replace("table_", "");
+                    lines.Add($"{statusIcon} {queryName,-35}");
+                    lines.Add($"  Oracle: {query.OracleExecutionTimeMs,8:F2}ms | PostgreSQL: {query.PostgresExecutionTimeMs,8:F2}ms | +{diff:F1}% slower");
+                }
+                lines.Add("");
+            }
+            
+            // Top 10 fastest tables
+            var fastTables = tableQueries
+                .Where(q => q.OracleExecuted && q.PostgresExecuted && q.PostgresExecutionTimeMs < q.OracleExecutionTimeMs)
+                .OrderBy(q => q.PostgresExecutionTimeMs - q.OracleExecutionTimeMs)
+                .Take(10)
+                .ToList();
+            
+            if (fastTables.Any())
+            {
+                lines.Add("TOP 10 FASTEST QUERIES IN POSTGRESQL");
+                lines.Add("───────────────────────────────────────────────────────────");
+                foreach (var query in fastTables)
+                {
+                    var diff = ((query.OracleExecutionTimeMs - query.PostgresExecutionTimeMs) / query.OracleExecutionTimeMs) * 100;
+                    var statusIcon = query.Status switch
+                    {
+                        PerformanceStatus.Passed => "✓",
+                        PerformanceStatus.Warning => "⚠",
+                        _ => "❌"
+                    };
+                    var queryName = query.QueryName.Replace("table_", "");
+                    lines.Add($"{statusIcon} {queryName,-35}");
+                    lines.Add($"  Oracle: {query.OracleExecutionTimeMs,8:F2}ms | PostgreSQL: {query.PostgresExecutionTimeMs,8:F2}ms | -{diff:F1}% faster");
+                }
+                lines.Add("");
+            }
+        }
 
         // Detailed results
         lines.Add("═══════════════════════════════════════════════════════════");
@@ -194,7 +492,15 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
 
             if (!string.IsNullOrEmpty(result.Notes))
             {
-                lines.Add($"Notes: {result.Notes}");
+                lines.Add($"Notes:");
+
+                foreach (var line in result.Notes.Split('\n'))
+                {
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        lines.Add($"  {line}");
+                    }
+                }
                 lines.Add("");
             }
 
@@ -225,6 +531,16 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
     {
         var statusClass = summary.FailedQueries > 0 || summary.RowCountMismatchQueries > 0 ? "failed" : 
                          summary.WarningQueries > 0 ? "warning" : "success";
+
+        // Calculate performance comparison for summary section
+        var performanceComparisonRow = "";
+        if (summary.AverageOracleExecutionTimeMs > 0)
+        {
+            var perfDiff = ((summary.AveragePostgresExecutionTimeMs - summary.AverageOracleExecutionTimeMs) / 
+                           summary.AverageOracleExecutionTimeMs) * 100;
+            var indicator = GetPerformanceIndicator(perfDiff, summary.ThresholdPercent);
+            performanceComparisonRow = $"<tr><td><strong>PostgreSQL vs Oracle</strong></td><td><strong>{Math.Abs(perfDiff):F1}% {indicator}</strong></td></tr>";
+        }
 
         var resultsHtml = string.Join("\n", summary.Results.OrderBy(r => r.QueryName).Select(result =>
         {
@@ -265,6 +581,13 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
                 perfDiffHtml = $"<div class='perf-diff'>Performance Difference: {result.PerformanceDifferencePercent:F1}%</div>";
             }
 
+            var notesHtml = "";
+            if (!string.IsNullOrEmpty(result.Notes))
+            {
+                var notesFormatted = result.Notes.Replace("\n", "<br>");
+                notesHtml = $"<div class='notes'><strong>Notes:</strong><br>{notesFormatted}</div>";
+            }
+
             return $@"
                 <div class='query-result {statusClass}'>
                     <h3>{statusIcon} {result.QueryName}</h3>
@@ -289,7 +612,7 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
                         </tr>
                     </table>
                     {perfDiffHtml}
-                    <div class='notes'><strong>Notes:</strong> {result.Notes}</div>
+                    {notesHtml}
                     {errorHtml}
                 </div>";
         }));
@@ -330,10 +653,32 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
         .query-result.success {{ border-left: 4px solid #28a745; }}
         .query-result.warning {{ border-left: 4px solid #ffc107; }}
         .query-result.failed {{ border-left: 4px solid #dc3545; }}
-        .summary {{ margin: 20px 0; padding: 20px; border-radius: 4px; }}
-        .summary.success {{ background: #d4edda; }}
-        .summary.warning {{ background: #fff3cd; }}
-        .summary.failed {{ background: #f8d7da; }}
+        .summary {{ 
+            margin: 20px 0; 
+            padding: 20px; 
+            border-radius: 4px; 
+            border: 2px solid #ddd;
+        }}
+        .summary.success {{ 
+            background: #d4edda; 
+            border-color: #28a745;
+        }}
+        .summary.warning {{ 
+            background: #fffbf0; 
+            border-color: #ff9800;
+        }}
+        .summary.failed {{ 
+            background: #f8d7da; 
+            border-color: #dc3545;
+        }}
+        .summary table td,
+        .summary table th {{
+            color: #212529;
+        }}
+        .summary h2,
+        .summary h3 {{
+            color: #212529;
+        }}
         .threshold-info {{
             margin: 20px 0;
             padding: 15px;
@@ -370,13 +715,197 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
             <table>
                 <tr><td>Oracle</td><td>{summary.AverageOracleExecutionTimeMs:F2}ms</td></tr>
                 <tr><td>PostgreSQL</td><td>{summary.AveragePostgresExecutionTimeMs:F2}ms</td></tr>
+                {performanceComparisonRow}
             </table>
         </div>
+
+        {GenerateTablePerformanceHtml(summary)}
 
         <h2>Query Results</h2>
         {resultsHtml}
     </div>
 </body>
 </html>";
+    }
+
+    private string GenerateTablePerformanceHtml(PerformanceTestSummary summary)
+    {
+        var tableQueries = summary.Results.Where(r => 
+            r.QueryName.StartsWith("table_count_") ||
+            r.QueryName.StartsWith("table_sample_") ||
+            r.QueryName.StartsWith("table_pk_lookup_") ||
+            r.QueryName.StartsWith("table_ordered_")).ToList();
+
+        if (!tableQueries.Any())
+        {
+            return "";
+        }
+
+        var countTests = tableQueries.Where(q => q.QueryName.StartsWith("table_count_")).ToList();
+        var sampleTests = tableQueries.Where(q => q.QueryName.StartsWith("table_sample_")).ToList();
+        var pkTests = tableQueries.Where(q => q.QueryName.StartsWith("table_pk_lookup_")).ToList();
+        var orderedTests = tableQueries.Where(q => q.QueryName.StartsWith("table_ordered_")).ToList();
+
+        var breakdownHtml = "";
+        if (countTests.Any())
+            breakdownHtml += $@"<tr>
+                <td>COUNT (Full Scan)</td>
+                <td>{countTests.Count}</td>
+                <td>{countTests.Count(q => q.Status == PerformanceStatus.Passed)}</td>
+                <td>{countTests.Count(q => q.Status == PerformanceStatus.Warning)}</td>
+                <td>{countTests.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch)}</td>
+            </tr>";
+
+        if (sampleTests.Any())
+            breakdownHtml += $@"<tr>
+                <td>SAMPLE (LIMIT)</td>
+                <td>{sampleTests.Count}</td>
+                <td>{sampleTests.Count(q => q.Status == PerformanceStatus.Passed)}</td>
+                <td>{sampleTests.Count(q => q.Status == PerformanceStatus.Warning)}</td>
+                <td>{sampleTests.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch)}</td>
+            </tr>";
+
+        if (pkTests.Any())
+            breakdownHtml += $@"<tr>
+                <td>PK LOOKUP (Index)</td>
+                <td>{pkTests.Count}</td>
+                <td>{pkTests.Count(q => q.Status == PerformanceStatus.Passed)}</td>
+                <td>{pkTests.Count(q => q.Status == PerformanceStatus.Warning)}</td>
+                <td>{pkTests.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch)}</td>
+            </tr>";
+
+        if (orderedTests.Any())
+            breakdownHtml += $@"<tr>
+                <td>ORDERED SCAN (Sort)</td>
+                <td>{orderedTests.Count}</td>
+                <td>{orderedTests.Count(q => q.Status == PerformanceStatus.Passed)}</td>
+                <td>{orderedTests.Count(q => q.Status == PerformanceStatus.Warning)}</td>
+                <td>{orderedTests.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch)}</td>
+            </tr>";
+
+        breakdownHtml += $@"<tr style='font-weight: bold; background-color: #f5f5f5;'>
+            <td>TOTAL</td>
+            <td>{tableQueries.Count}</td>
+            <td>{tableQueries.Count(q => q.Status == PerformanceStatus.Passed)}</td>
+            <td>{tableQueries.Count(q => q.Status == PerformanceStatus.Warning)}</td>
+            <td>{tableQueries.Count(q => q.Status == PerformanceStatus.Failed || q.Status == PerformanceStatus.RowCountMismatch)}</td>
+        </tr>";
+
+        // Top 10 slowest tables
+        var slowTablesHtml = "";
+        var slowTables = tableQueries
+            .Where(q => q.OracleExecuted && q.PostgresExecuted && q.PostgresExecutionTimeMs > q.OracleExecutionTimeMs)
+            .OrderByDescending(q => q.PostgresExecutionTimeMs - q.OracleExecutionTimeMs)
+            .Take(10)
+            .ToList();
+
+        if (slowTables.Any())
+        {
+            slowTablesHtml = @"
+            <h3>Top 10 Slowest Queries in PostgreSQL</h3>
+            <table>
+                <tr>
+                    <th>Query</th>
+                    <th>Oracle Time</th>
+                    <th>PostgreSQL Time</th>
+                    <th>Difference</th>
+                    <th>Status</th>
+                </tr>";
+
+            foreach (var query in slowTables)
+            {
+                var diff = ((query.PostgresExecutionTimeMs - query.OracleExecutionTimeMs) / query.OracleExecutionTimeMs) * 100;
+                var statusIcon = query.Status switch
+                {
+                    PerformanceStatus.Passed => "✓",
+                    PerformanceStatus.Warning => "⚠",
+                    _ => "❌"
+                };
+                var rowClass = query.Status switch
+                {
+                    PerformanceStatus.Passed => "",
+                    PerformanceStatus.Warning => "style='background-color: #fff3cd;'",
+                    _ => "style='background-color: #f8d7da;'"
+                };
+
+                slowTablesHtml += $@"
+                <tr {rowClass}>
+                    <td>{query.QueryName.Replace("table_", "")}</td>
+                    <td>{query.OracleExecutionTimeMs:F2}ms</td>
+                    <td>{query.PostgresExecutionTimeMs:F2}ms</td>
+                    <td>+{diff:F1}%</td>
+                    <td>{statusIcon}</td>
+                </tr>";
+            }
+
+            slowTablesHtml += "</table>";
+        }
+
+        // Top 10 fastest tables
+        var fastTablesHtml = "";
+        var fastTables = tableQueries
+            .Where(q => q.OracleExecuted && q.PostgresExecuted && q.PostgresExecutionTimeMs < q.OracleExecutionTimeMs)
+            .OrderBy(q => q.PostgresExecutionTimeMs - q.OracleExecutionTimeMs)
+            .Take(10)
+            .ToList();
+
+        if (fastTables.Any())
+        {
+            fastTablesHtml = @"
+            <h3>Top 10 Fastest Queries in PostgreSQL</h3>
+            <table>
+                <tr>
+                    <th>Query</th>
+                    <th>Oracle Time</th>
+                    <th>PostgreSQL Time</th>
+                    <th>Improvement</th>
+                    <th>Status</th>
+                </tr>";
+
+            foreach (var query in fastTables)
+            {
+                var diff = ((query.OracleExecutionTimeMs - query.PostgresExecutionTimeMs) / query.OracleExecutionTimeMs) * 100;
+                var statusIcon = query.Status switch
+                {
+                    PerformanceStatus.Passed => "✓",
+                    PerformanceStatus.Warning => "⚠",
+                    _ => "❌"
+                };
+                var rowClass = query.Status switch
+                {
+                    PerformanceStatus.Passed => "style='background-color: #d4edda;'",
+                    PerformanceStatus.Warning => "style='background-color: #fff3cd;'",
+                    _ => "style='background-color: #f8d7da;'"
+                };
+
+                fastTablesHtml += $@"
+                <tr {rowClass}>
+                    <td>{query.QueryName.Replace("table_", "")}</td>
+                    <td>{query.OracleExecutionTimeMs:F2}ms</td>
+                    <td>{query.PostgresExecutionTimeMs:F2}ms</td>
+                    <td>-{diff:F1}%</td>
+                    <td>{statusIcon}</td>
+                </tr>";
+            }
+
+            fastTablesHtml += "</table>";
+        }
+
+        return $@"
+        <div class='summary'>
+            <h2>Table Performance Tests</h2>
+            <table>
+                <tr>
+                    <th>Test Type</th>
+                    <th>Total</th>
+                    <th>Passed</th>
+                    <th>Warning</th>
+                    <th>Failed</th>
+                </tr>
+                {breakdownHtml}
+            </table>
+            {slowTablesHtml}
+            {fastTablesHtml}
+        </div>";
     }
 }

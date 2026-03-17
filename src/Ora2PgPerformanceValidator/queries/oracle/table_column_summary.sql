@@ -5,12 +5,12 @@ SELECT
     SUM(c.data_length) as total_data_length,
     COUNT(CASE WHEN c.nullable = 'Y' THEN 1 END) as nullable_columns,
     COUNT(CASE WHEN c.nullable = 'N' THEN 1 END) as not_null_columns
-FROM 
+FROM
     all_tables t
-    LEFT JOIN all_tab_columns c ON t.owner = c.owner AND t.table_name = c.table_name
-WHERE 
+        LEFT JOIN all_tab_columns c ON t.owner = c.owner AND t.table_name = c.table_name
+WHERE
     t.owner = '{ORACLE_SCHEMA}'
-GROUP BY 
+GROUP BY
     t.table_name
-ORDER BY 
+ORDER BY
     t.table_name

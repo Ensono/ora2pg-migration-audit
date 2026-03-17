@@ -79,14 +79,20 @@ public class QueryExecutor
         };
 
         _logger.Information("Executing query pair: {QueryName}", queryName);
+        
+        var captureObjectNames = ShouldCaptureObjectNames(queryName);
+        var isAggregate = IsAggregateQuery(queryName);
 
         try
         {
-            var (execTime, rowCount) = await ExecuteOracleQueryAsync(oracleQuery);
+            var (execTime, rowCount, objectNames) = await ExecuteOracleQueryAsync(oracleQuery, captureObjectNames, isAggregate);
             result.OracleExecuted = true;
             result.OracleExecutionTimeMs = execTime;
             result.OracleRowsAffected = rowCount;
-            _logger.Information("  Oracle: {Time:F2}ms, {Rows} rows", execTime, rowCount);
+            result.OracleObjectNames = objectNames;
+            _logger.Information("  Oracle: {Time:F2}ms, {Rows} rows{Objects}", 
+                execTime, rowCount, 
+                captureObjectNames ? $", captured {objectNames.Count} object names" : "");
         }
         catch (Exception ex)
         {
@@ -97,11 +103,14 @@ public class QueryExecutor
 
         try
         {
-            var (execTime, rowCount) = await ExecutePostgresQueryAsync(postgresQuery);
+            var (execTime, rowCount, objectNames) = await ExecutePostgresQueryAsync(postgresQuery, captureObjectNames, isAggregate);
             result.PostgresExecuted = true;
             result.PostgresExecutionTimeMs = execTime;
             result.PostgresRowsAffected = rowCount;
-            _logger.Information("  PostgreSQL: {Time:F2}ms, {Rows} rows", execTime, rowCount);
+            result.PostgresObjectNames = objectNames;
+            _logger.Information("  PostgreSQL: {Time:F2}ms, {Rows} rows{Objects}", 
+                execTime, rowCount,
+                captureObjectNames ? $", captured {objectNames.Count} object names" : "");
         }
         catch (Exception ex)
         {
@@ -115,7 +124,19 @@ public class QueryExecutor
         return result;
     }
 
-    private async Task<(double executionTimeMs, long rowCount)> ExecuteOracleQueryAsync(string query)
+    private bool ShouldCaptureObjectNames(string queryName)
+    {
+        return IsIndexQuery(queryName) || IsSequenceQuery(queryName) || IsConstraintQuery(queryName);
+    }
+
+    private bool IsAggregateQuery(string queryName)
+    {
+        // Queries that return a single row with an aggregate COUNT value
+        return queryName.Contains("count", StringComparison.OrdinalIgnoreCase) ||
+               queryName.Contains("02_count_tables", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<(double executionTimeMs, long rowCount, List<string> objectNames)> ExecuteOracleQueryAsync(string query, bool captureObjectNames = false, bool isAggregateQuery = false)
     {
         await using var conn = new OracleConnection(_oracleConnectionString);
         await conn.OpenAsync();
@@ -130,6 +151,7 @@ public class QueryExecutor
 
         var times = new List<double>();
         long rowCount = 0;
+        var objectNames = new List<string>();
         int? tableNameColumnIndex = null;
         int? columnNameColumnIndex = null;
         bool checkedForColumns = false;
@@ -166,6 +188,15 @@ public class QueryExecutor
             
             while (await reader.ReadAsync())
             {
+                // For aggregate queries (COUNT queries), read the value from first column instead of counting rows
+                if (isAggregateQuery && i == 0 && reader.FieldCount > 0 && !reader.IsDBNull(0))
+                {
+                    // Read the aggregate value (e.g., COUNT(*))
+                    currentRowCount = Convert.ToInt64(reader.GetValue(0));
+                    _logger.Debug("Oracle - Read aggregate value: {Count}", currentRowCount);
+                    break; // Only need the first row for aggregate queries
+                }
+                
                 // If query returns table names, filter using ObjectFilter
                 if (tableNameColumnIndex.HasValue)
                 {
@@ -185,6 +216,25 @@ public class QueryExecutor
                         continue; // Skip excluded column
                     }
                 }
+
+                if (captureObjectNames && i == 0 && reader.FieldCount > 0)
+                {
+                    try
+                    {
+                        // Try to read the first column as a string for object names
+                        // Handle various data types that might not convert directly to string
+                        object value = reader.GetValue(0);
+                        var objectName = value?.ToString() ?? string.Empty;
+                        if (!string.IsNullOrEmpty(objectName))
+                        {
+                            objectNames.Add(objectName);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Debug("Could not read object name from first column: {Error}", ex.Message);
+                    }
+                }
                 
                 currentRowCount++;
             }
@@ -194,13 +244,24 @@ public class QueryExecutor
             rowCount = currentRowCount; // Use last run's row count
         }
 
-        return (GetMedian(times), rowCount);
+        if (captureObjectNames && objectNames.Count > 0)
+        {
+            _logger.Debug("Oracle - Captured {Count} object names from first column", objectNames.Count);
+        }
+
+        return (GetMedian(times), rowCount, objectNames);
     }
 
-    private async Task<(double executionTimeMs, long rowCount)> ExecutePostgresQueryAsync(string query)
+    private async Task<(double executionTimeMs, long rowCount, List<string> objectNames)> ExecutePostgresQueryAsync(string query, bool captureObjectNames = false, bool isAggregateQuery = false)
     {
         await using var conn = new NpgsqlConnection(_postgresConnectionString);
         await conn.OpenAsync();
+        
+        // Set search_path to include the target schema
+        await using (var setPathCmd = new NpgsqlCommand($"SET search_path TO {_postgresSchema}, public", conn))
+        {
+            await setPathCmd.ExecuteNonQueryAsync();
+        }
         
         for (int i = 0; i < _warmupRuns; i++)
         {
@@ -212,6 +273,7 @@ public class QueryExecutor
 
         var times = new List<double>();
         long rowCount = 0;
+        var objectNames = new List<string>();
         int? tableNameColumnIndex = null;
         int? columnNameColumnIndex = null;
         bool checkedForColumns = false;
@@ -267,6 +329,25 @@ public class QueryExecutor
                         continue; // Skip excluded column
                     }
                 }
+
+                if (captureObjectNames && i == 0 && reader.FieldCount > 0)
+                {
+                    try
+                    {
+                        // Try to read the first column as a string for object names
+                        // Handle various data types that might not convert directly to string
+                        object value = reader.GetValue(0);
+                        var objectName = value?.ToString() ?? string.Empty;
+                        if (!string.IsNullOrEmpty(objectName))
+                        {
+                            objectNames.Add(objectName);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Debug("Could not read object name from first column: {Error}", ex.Message);
+                    }
+                }
                 
                 currentRowCount++;
             }
@@ -276,7 +357,12 @@ public class QueryExecutor
             rowCount = currentRowCount;
         }
 
-        return (GetMedian(times), rowCount);
+        if (captureObjectNames && objectNames.Count > 0)
+        {
+            _logger.Debug("PostgreSQL - Captured {Count} object names from first column", objectNames.Count);
+        }
+
+        return (GetMedian(times), rowCount, objectNames);
     }
 
     private double GetMedian(List<double> values)
@@ -303,6 +389,45 @@ public class QueryExecutor
 
         if (result.OracleRowsAffected != result.PostgresRowsAffected)
         {
+            // Special handling for index queries - DMS adds extra rowid indexes
+            if (IsIndexQuery(result.QueryName) && result.PostgresRowsAffected > result.OracleRowsAffected)
+            {
+                var extraObjects = AnalyzeDmsGeneratedObjects(result.OracleObjectNames, result.PostgresObjectNames, "index", "es");
+                if (extraObjects.isDmsGenerated)
+                {
+                    result.Status = PerformanceStatus.Passed;
+                    result.Notes = extraObjects.notes;
+                    _logger.Information("  ℹ️  Index query: {Extra} extra rowid index(es) added by DMS migration - marking as PASSED", extraObjects.count);
+                    return;
+                }
+            }
+            
+            // Special handling for sequence queries - DMS adds extra rowid sequences
+            if (IsSequenceQuery(result.QueryName) && result.PostgresRowsAffected > result.OracleRowsAffected)
+            {
+                var extraObjects = AnalyzeDmsGeneratedObjects(result.OracleObjectNames, result.PostgresObjectNames, "sequence", "s");
+                if (extraObjects.isDmsGenerated)
+                {
+                    result.Status = PerformanceStatus.Passed;
+                    result.Notes = extraObjects.notes;
+                    _logger.Information("  ℹ️  Sequence query: {Extra} extra rowid sequence(s) added by DMS migration - marking as PASSED", extraObjects.count);
+                    return;
+                }
+            }
+            
+            // Special handling for constraint queries - DMS adds extra rowid primary keys
+            if (IsConstraintQuery(result.QueryName) && result.PostgresRowsAffected > result.OracleRowsAffected)
+            {
+                var extraObjects = AnalyzeDmsGeneratedObjects(result.OracleObjectNames, result.PostgresObjectNames, "constraint", "s");
+                if (extraObjects.isDmsGenerated)
+                {
+                    result.Status = PerformanceStatus.Passed;
+                    result.Notes = extraObjects.notes;
+                    _logger.Information("  ℹ️  Constraint query: {Extra} extra rowid constraint(s) added by DMS migration - marking as PASSED", extraObjects.count);
+                    return;
+                }
+            }
+            
             result.Status = PerformanceStatus.RowCountMismatch;
             result.Notes = $"Row count mismatch: Oracle={result.OracleRowsAffected}, PostgreSQL={result.PostgresRowsAffected}";
             return;
@@ -327,5 +452,69 @@ public class QueryExecutor
             var slower = result.OracleExecutionTimeMs > result.PostgresExecutionTimeMs ? "Oracle" : "PostgreSQL";
             result.Notes = $"Significant performance difference: {slower} is {result.PerformanceDifferencePercent:F1}% slower";
         }
+    }
+
+    private (bool isDmsGenerated, int count, string notes) AnalyzeDmsGeneratedObjects(
+        List<string> oracleObjects, 
+        List<string> postgresObjects, 
+        string objectType,
+        string pluralSuffix)
+    {
+        _logger.Debug("Analyzing DMS objects - Oracle count: {OracleCount}, PostgreSQL count: {PostgresCount}", 
+            oracleObjects.Count, postgresObjects.Count);
+        
+        if (oracleObjects.Count == 0 && postgresObjects.Count == 0)
+        {
+            _logger.Warning("No object names captured for {ObjectType} - unable to perform detailed DMS analysis", objectType);
+            return (false, 0, string.Empty);
+        }
+        
+        // Find extra objects in PostgreSQL that aren't in Oracle
+        var extraObjects = postgresObjects.Except(oracleObjects, StringComparer.OrdinalIgnoreCase).ToList();
+        
+        _logger.Debug("Extra {ObjectType} in PostgreSQL: {Count} - {Objects}", 
+            objectType, extraObjects.Count, string.Join(", ", extraObjects));
+        
+        if (extraObjects.Count == 0)
+            return (false, 0, string.Empty);
+        
+        // Check if all extra objects contain "rowid" (DMS-generated pattern)
+        var dmsGeneratedObjects = extraObjects.Where(obj => obj.Contains("rowid", StringComparison.OrdinalIgnoreCase)).ToList();
+        
+        _logger.Debug("DMS-generated {ObjectType}: {Count} - {Objects}", 
+            objectType, dmsGeneratedObjects.Count, string.Join(", ", dmsGeneratedObjects));
+        
+        if (dmsGeneratedObjects.Count == extraObjects.Count)
+        {
+            // All extra objects are DMS-generated
+            var plural = dmsGeneratedObjects.Count > 1 ? pluralSuffix : "";
+            var objectNames = string.Join(", ", dmsGeneratedObjects);
+            var notes = $"✅ PASSED (with {dmsGeneratedObjects.Count} extra DMS-generated rowid {objectType}{plural} in PostgreSQL - expected behavior)\n" +
+                       $"Extra {objectType}{plural}: {objectNames}";
+            return (true, dmsGeneratedObjects.Count, notes);
+        }
+        
+        // Some extra objects are not DMS-generated - this is a real mismatch
+        _logger.Warning("Row count mismatch includes non-DMS objects: {DmsCount}/{TotalCount} are DMS-generated", 
+            dmsGeneratedObjects.Count, extraObjects.Count);
+        return (false, 0, string.Empty);
+    }
+
+    private bool IsIndexQuery(string queryName)
+    {
+        return queryName.Contains("index", StringComparison.OrdinalIgnoreCase) ||
+               queryName.Contains("03_list_indexes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool IsSequenceQuery(string queryName)
+    {
+        return queryName.Contains("sequence", StringComparison.OrdinalIgnoreCase) ||
+               queryName.Contains("06_list_sequences", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool IsConstraintQuery(string queryName)
+    {
+        return queryName.Contains("constraint", StringComparison.OrdinalIgnoreCase) ||
+               queryName.Contains("04_list_constraints", StringComparison.OrdinalIgnoreCase);
     }
 }

@@ -5,6 +5,8 @@ using Ora2PgPerformanceValidator.Loaders;
 using Ora2PgPerformanceValidator.Executors;
 using Ora2PgPerformanceValidator.Writers;
 using Ora2PgPerformanceValidator.Models;
+using Ora2PgPerformanceValidator.Discovery;
+using Ora2PgPerformanceValidator.Generators;
 using Serilog;
 using System.Diagnostics;
 
@@ -77,6 +79,9 @@ try
     }
     Log.Information("");
 
+    var oracleSchema = queryParameters["ORACLE_SCHEMA"];
+    var postgresSchema = queryParameters["POSTGRES_SCHEMA"];
+
     var loader = new QueryLoader();
     var queryPairs = loader.LoadQueryPairs(oracleQueriesPath, postgresQueriesPath, queryParameters);
 
@@ -87,8 +92,130 @@ try
         Environment.Exit(0);
     }
 
-    Log.Information("Found {Count} query pairs to test", queryPairs.Count);
+    Log.Information("Found {Count} static query pairs to test", queryPairs.Count);
     Log.Information("");
+
+    var objectFilter = ObjectFilter.FromProperties(props);
+
+    var enableTableTests = props.GetBool("ENABLE_TABLE_PERFORMANCE_TESTS", true);
+    var maxTablesToTest = props.GetInt("MAX_TABLES_TO_TEST", 100);
+    var sampleRowLimit = props.GetInt("SAMPLE_ROW_LIMIT", 100);
+    var enableCountTests = props.GetBool("ENABLE_COUNT_TESTS", true);
+    var enableSampleTests = props.GetBool("ENABLE_SAMPLE_TESTS", true);
+    var enablePkLookupTests = props.GetBool("ENABLE_PK_LOOKUP_TESTS", true);
+    var enableOrderedScanTests = props.GetBool("ENABLE_ORDERED_SCAN_TESTS", true);
+
+    if (enableTableTests)
+    {
+        Log.Information("═══════════════════════════════════════════════════════════");
+        Log.Information("  DISCOVERING TABLES FOR PERFORMANCE TESTING");
+        Log.Information("═══════════════════════════════════════════════════════════");
+        Log.Information("");
+
+        var tableDiscovery = new TableDiscovery(
+            oracleConfig.GetOracleConnectionString(),
+            postgresConfig.GetPostgresConnectionString(),
+            oracleSchema,
+            postgresSchema);
+
+        var oracleTables = await tableDiscovery.DiscoverOracleTablesAsync();
+        var postgresTables = await tableDiscovery.DiscoverPostgresTablesAsync();
+        
+        Log.Information("Found {OracleCount} tables in Oracle schema {Schema}", oracleTables.Count, oracleSchema);
+        Log.Information("Found {PostgresCount} tables in PostgreSQL schema {Schema}", postgresTables.Count, postgresSchema);
+        
+        // Only test tables that exist in both databases
+        var commonTables = oracleTables.Where(ot => 
+            postgresTables.Any(pt => pt.Name.Equals(ot.Name, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+        
+        Log.Information("Found {CommonCount} common tables to test", commonTables.Count);
+        
+        // Apply table exclusions
+        var beforeExclusionCount = commonTables.Count;
+        commonTables = commonTables.Where(t => !objectFilter.IsTableExcluded(t.Name, oracleSchema)).ToList();
+        var excludedCount = beforeExclusionCount - commonTables.Count;
+        
+        if (excludedCount > 0)
+        {
+            Log.Information("Excluded {ExcludedCount} table(s) based on exclusion filters", excludedCount);
+            Log.Information("{RemainingCount} table(s) remain after exclusions", commonTables.Count);
+        }
+        
+        if (commonTables.Count == 0)
+        {
+            Log.Warning("No common tables found between Oracle and PostgreSQL schemas");
+            Log.Warning("Skipping table performance tests");
+            oracleTables = new List<TableInfo>();
+        }
+        else
+        {
+            oracleTables = commonTables;
+            
+            if (oracleTables.Count > maxTablesToTest)
+            {
+                Log.Warning("Limiting to {Max} tables (out of {Total} common tables)", maxTablesToTest, oracleTables.Count);
+                oracleTables = oracleTables.Take(maxTablesToTest).ToList();
+            }
+        }
+
+        Log.Information("");
+        Log.Information("Table Performance Test Settings:");
+        Log.Information("  Count Tests: {Enabled}", enableCountTests);
+        Log.Information("  Sample Tests: {Enabled}", enableSampleTests);
+        Log.Information("  PK Lookup Tests: {Enabled}", enablePkLookupTests);
+        Log.Information("  Ordered Scan Tests: {Enabled}", enableOrderedScanTests);
+        Log.Information("  Sample Row Limit: {Limit}", sampleRowLimit);
+        Log.Information("");
+
+        var queryGenerator = new TablePerformanceQueryGenerator(oracleSchema, postgresSchema);
+        var tableQueries = queryGenerator.GenerateQueries(
+            oracleTables,
+            enableCountTests,
+            enableSampleTests,
+            enablePkLookupTests,
+            enableOrderedScanTests,
+            sampleRowLimit);
+
+        Log.Information("Generated {Count} table performance queries", tableQueries.Count);
+        Log.Information("");
+
+        foreach (var (name, oracleQuery, postgresQuery, category) in tableQueries)
+        {
+            if (category == "pk_lookup")
+            {
+                var tableName = name.Replace("table_pk_lookup_", "");
+                var table = oracleTables.FirstOrDefault(t => t.Name == tableName);
+                
+                if (table?.PrimaryKey != null)
+                {
+                    var pkValue = await tableDiscovery.GetSamplePrimaryKeyValueAsync(tableName, table.PrimaryKey);
+                    if (pkValue != null)
+                    {
+                        var (oracleQueryWithValue, postgresQueryWithValue) = 
+                            queryGenerator.SubstitutePkValue(oracleQuery, postgresQuery, pkValue);
+                        queryPairs[name] = (oracleQueryWithValue, postgresQueryWithValue);
+                    }
+                    else
+                    {
+                        Log.Warning("  Skipping PK lookup test for {Table} - no sample value found", tableName);
+                    }
+                }
+            }
+            else
+            {
+                queryPairs[name] = (oracleQuery, postgresQuery);
+            }
+        }
+
+        Log.Information("Total queries to execute: {Count}", queryPairs.Count);
+        Log.Information("");
+    }
+    else
+    {
+        Log.Information("Table performance testing disabled (ENABLE_TABLE_PERFORMANCE_TESTS=false)");
+        Log.Information("");
+    }
 
     var warmupRuns = props.GetInt("PERF_WARMUP_RUNS", 1);
     var measurementRuns = props.GetInt("PERF_MEASUREMENT_RUNS", 3);
@@ -99,11 +226,6 @@ try
     Log.Information("  Measurement runs: {Measurement}", measurementRuns);
     Log.Information("  Performance threshold: {Threshold}%", thresholdPercent);
     Log.Information("");
-
-    var objectFilter = ObjectFilter.FromProperties(props);
-    
-    var oracleSchema = queryParameters["ORACLE_SCHEMA"];
-    var postgresSchema = queryParameters["POSTGRES_SCHEMA"];
 
     var executor = new QueryExecutor(
         oracleConfig.GetOracleConnectionString(),
