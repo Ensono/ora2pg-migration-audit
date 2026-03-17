@@ -123,7 +123,8 @@ class Program
             var reportsDir = props.GetReportsDirectory("Ora2PgRowCountValidator");
 
             var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-            var baseReportPath = Path.Combine(reportsDir, $"rowcount-validation-{timestamp}");
+            var schemaPrefix = $"{oracleSchema.ToLower()}-";
+            var baseReportPath = Path.Combine(reportsDir, $"{schemaPrefix}rowcount-validation-{timestamp}");
 
             var reportWriter = new ValidationReportWriter();
             await reportWriter.WriteReportsAsync(result, baseReportPath);

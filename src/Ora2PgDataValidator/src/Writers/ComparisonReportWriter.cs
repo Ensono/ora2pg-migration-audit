@@ -15,15 +15,15 @@ public class ComparisonReportWriter
         _reportsDir = props.GetReportsDirectory("Ora2PgDataValidator");
     }
     
-    public string GenerateDetailedReport(List<ComparisonResult> results)
+    public string GenerateDetailedReport(List<ComparisonResult> results, string schemaPrefix = "")
     {
         if (!Directory.Exists(_reportsDir))
         {
             Directory.CreateDirectory(_reportsDir);
         }
 
-        string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-        string reportFilename = $"migration_comparison_report_{timestamp}.txt";
+        string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        string reportFilename = $"{schemaPrefix}data-fingerprint-validation-{timestamp}.txt";
         string reportPath = Path.Combine(_reportsDir, reportFilename);
 
         using var writer = new StreamWriter(reportPath);

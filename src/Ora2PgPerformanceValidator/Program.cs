@@ -291,14 +291,17 @@ try
 
     var reportsDir = props.GetReportsDirectory("Ora2PgPerformanceValidator");
     var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+    
+    var firstOracleSchema = props.Get("ORACLE_SCHEMA", "").Split(',')[0].Trim().ToLower();
+    var schemaPrefix = !string.IsNullOrWhiteSpace(firstOracleSchema) ? $"{firstOracleSchema}-" : "";
 
-    var markdownPath = Path.Combine(reportsDir, $"performance-validation-{timestamp}.md");
+    var markdownPath = Path.Combine(reportsDir, $"{schemaPrefix}performance-validation-{timestamp}.md");
     reportWriter.WriteMarkdownReport(summary, markdownPath);
 
-    var htmlPath = Path.Combine(reportsDir, $"performance-validation-{timestamp}.html");
+    var htmlPath = Path.Combine(reportsDir, $"{schemaPrefix}performance-validation-{timestamp}.html");
     reportWriter.WriteHtmlReport(summary, htmlPath);
 
-    var txtPath = Path.Combine(reportsDir, $"performance-validation-{timestamp}.txt");
+    var txtPath = Path.Combine(reportsDir, $"{schemaPrefix}performance-validation-{timestamp}.txt");
     reportWriter.WriteTextReport(summary, txtPath);
 
     connectionManager.Dispose();

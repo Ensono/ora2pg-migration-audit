@@ -114,21 +114,39 @@ class Program
         }
         else
         {
-            Log.Warning("No tables specified - discovering tables from database schema");
+            Log.Warning("No tables specified - discovering tables from database schema(s)");
 
-            string schemaName = targetDatabase == DatabaseType.Oracle
+            string schemasStr = targetDatabase == DatabaseType.Oracle
                 ? props.Get("ORACLE_SCHEMA", "")
                 : props.Get("POSTGRES_SCHEMA", "");
 
-            if (string.IsNullOrWhiteSpace(schemaName))
+            if (string.IsNullOrWhiteSpace(schemasStr))
             {
                 Log.Error("✗ No schema specified. Set ORACLE_SCHEMA or POSTGRES_SCHEMA in .env");
                 Environment.Exit(1);
                 return;
             }
 
-            tables = connectionManager.GetTablesInSchema(targetDatabase, schemaName);
-            Log.Information("Discovered {Count} tables in schema {Schema}", tables.Count, schemaName);
+            var schemas = schemasStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            
+            if (schemas.Length > 1)
+            {
+                Log.Information("Multi-schema mode: Discovering tables from {Count} schemas", schemas.Length);
+            }
+
+            tables = new List<string>();
+            foreach (var schema in schemas)
+            {
+                var schemaTables = connectionManager.GetTablesInSchema(targetDatabase, schema);
+                Log.Information("  Discovered {Count} tables in schema {Schema}", schemaTables.Count, schema);
+                
+                foreach (var table in schemaTables)
+                {
+                    tables.Add($"{schema}.{table}");
+                }
+            }
+            
+            Log.Information("Total: Discovered {Count} tables across all schemas", tables.Count);
         }
 
         var tableFilter = ObjectFilter.FromProperties(props);
@@ -202,10 +220,10 @@ class Program
             Log.Information("");
             Log.Information("5. Discovering all common tables between Oracle and PostgreSQL...");
             
-            string oracleSchema = props.Get("ORACLE_SCHEMA", "");
-            string postgresSchema = props.Get("POSTGRES_SCHEMA", "");
+            string oracleSchemasStr = props.Get("ORACLE_SCHEMA", "");
+            string postgresSchemasStr = props.Get("POSTGRES_SCHEMA", "");
 
-            if (string.IsNullOrWhiteSpace(oracleSchema) || string.IsNullOrWhiteSpace(postgresSchema))
+            if (string.IsNullOrWhiteSpace(oracleSchemasStr) || string.IsNullOrWhiteSpace(postgresSchemasStr))
             {
                 Log.Error("✗ Schema names required for auto-discovery");
                 Log.Error("  Set ORACLE_SCHEMA and POSTGRES_SCHEMA in .env");
@@ -213,24 +231,57 @@ class Program
                 return;
             }
 
-            var oracleTables = connectionManager.GetTablesInSchema(DatabaseType.Oracle, oracleSchema);
-            var postgresTables = connectionManager.GetTablesInSchema(DatabaseType.PostgreSQL, postgresSchema);
+            var oracleSchemas = oracleSchemasStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var postgresSchemas = postgresSchemasStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-            tableMapping = new Dictionary<string, string>();
-            foreach (var oracleTable in oracleTables)
+            if (oracleSchemas.Length != postgresSchemas.Length)
             {
-                var matchingPostgresTable = postgresTables
-                    .FirstOrDefault(pt => string.Equals(pt, oracleTable, StringComparison.OrdinalIgnoreCase));
-                
-                if (matchingPostgresTable != null)
-                {
-                    string oracleRef = $"{oracleSchema}.{oracleTable}";
-                    string postgresRef = $"{postgresSchema}.{matchingPostgresTable}";
-                    tableMapping[oracleRef] = postgresRef;
-                }
+                Log.Error("✗ Number of Oracle schemas ({OracleCount}) must match number of PostgreSQL schemas ({PostgresCount})", 
+                    oracleSchemas.Length, postgresSchemas.Length);
+                Log.Error("  ORACLE_SCHEMA: {OracleSchemas}", oracleSchemasStr);
+                Log.Error("  POSTGRES_SCHEMA: {PostgresSchemas}", postgresSchemasStr);
+                Log.Error("  Schemas must be provided in matching order, comma-separated");
+                Environment.Exit(1);
+                return;
             }
 
-            Log.Information("Found {Count} common tables", tableMapping.Count);
+            if (oracleSchemas.Length > 1)
+            {
+                Log.Information("Multi-schema mode: Testing {Count} schema pairs", oracleSchemas.Length);
+            }
+
+            tableMapping = new Dictionary<string, string>();
+            
+            for (int i = 0; i < oracleSchemas.Length; i++)
+            {
+                string oracleSchema = oracleSchemas[i];
+                string postgresSchema = postgresSchemas[i];
+
+                Log.Information("  Discovering tables in schema pair: {OracleSchema} → {PostgresSchema}", 
+                    oracleSchema, postgresSchema);
+
+                var oracleTables = connectionManager.GetTablesInSchema(DatabaseType.Oracle, oracleSchema);
+                var postgresTables = connectionManager.GetTablesInSchema(DatabaseType.PostgreSQL, postgresSchema);
+
+                int pairCount = 0;
+                foreach (var oracleTable in oracleTables)
+                {
+                    var matchingPostgresTable = postgresTables
+                        .FirstOrDefault(pt => string.Equals(pt, oracleTable, StringComparison.OrdinalIgnoreCase));
+                    
+                    if (matchingPostgresTable != null)
+                    {
+                        string oracleRef = $"{oracleSchema}.{oracleTable}";
+                        string postgresRef = $"{postgresSchema}.{matchingPostgresTable}";
+                        tableMapping[oracleRef] = postgresRef;
+                        pairCount++;
+                    }
+                }
+
+                Log.Information("    Found {Count} common tables in this schema pair", pairCount);
+            }
+
+            Log.Information("Total: Found {Count} common tables across all schemas", tableMapping.Count);
         }
         else
         {

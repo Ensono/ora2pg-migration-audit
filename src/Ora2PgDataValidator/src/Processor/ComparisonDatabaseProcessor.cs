@@ -106,20 +106,31 @@ public class ComparisonDatabaseProcessor
 
         try
         {
-            var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             var props = ApplicationProperties.Instance;
             var reportsDir = props.GetReportsDirectory("Ora2PgDataValidator");
 
+            var schemaPrefix = "";
+            if (tableMapping.Any())
+            {
+                var firstOracleTable = tableMapping.First().Key;
+                if (firstOracleTable.Contains('.'))
+                {
+                    var schema = firstOracleTable.Split('.')[0].ToLower();
+                    schemaPrefix = $"{schema}-";
+                }
+            }
+
             var markdownWriter = new DataValidationMarkdownWriter();
-            var markdownReportPath = Path.Combine(reportsDir, $"data_fingerprint_validation_{timestamp}.md");
+            var markdownReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.md");
             markdownWriter.WriteMarkdownReport(allResults, markdownReportPath);
             Log.Information("📄 Markdown report saved to: {ReportPath}", markdownReportPath);
 
-            string textReportPath = _reportWriter.GenerateDetailedReport(allResults);
+            string textReportPath = _reportWriter.GenerateDetailedReport(allResults, schemaPrefix);
             Log.Information("📄 Text report saved to: {ReportPath}", textReportPath);
 
             var htmlWriter = new DataValidationHtmlWriter();
-            var htmlReportPath = Path.Combine(reportsDir, $"data_fingerprint_validation_{timestamp}.html");
+            var htmlReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.html");
             htmlWriter.WriteHtmlReport(allResults, htmlReportPath);
             Log.Information("📄 HTML report saved to: {ReportPath}", htmlReportPath);
         }
@@ -215,20 +226,31 @@ public class ComparisonDatabaseProcessor
 
         try
         {
-            var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             var props = ApplicationProperties.Instance;
             var reportsDir = props.GetReportsDirectory("Ora2PgDataValidator");
 
+            var schemaPrefix = "";
+            if (objectMapping.Any())
+            {
+                var firstSourceObject = objectMapping.First().Key;
+                if (firstSourceObject.Contains('.'))
+                {
+                    var schema = firstSourceObject.Split('.')[0].ToLower();
+                    schemaPrefix = $"{schema}-";
+                }
+            }
+
             var markdownWriter = new DataValidationMarkdownWriter();
-            var markdownReportPath = Path.Combine(reportsDir, $"data_fingerprint_validation_{timestamp}.md");
+            var markdownReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.md");
             markdownWriter.WriteMarkdownReport(allResults, markdownReportPath);
             Log.Information("📄 Markdown report saved to: {ReportPath}", markdownReportPath);
 
-            string textReportPath = _reportWriter.GenerateDetailedReport(allResults);
+            string textReportPath = _reportWriter.GenerateDetailedReport(allResults, schemaPrefix);
             Log.Information("📄 Text report saved to: {ReportPath}", textReportPath);
 
             var htmlWriter = new DataValidationHtmlWriter();
-            var htmlReportPath = Path.Combine(reportsDir, $"data_fingerprint_validation_{timestamp}.html");
+            var htmlReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.html");
             htmlWriter.WriteHtmlReport(allResults, htmlReportPath);
             Log.Information("📄 HTML report saved to: {ReportPath}", htmlReportPath);
         }
