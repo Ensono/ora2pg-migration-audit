@@ -448,18 +448,18 @@ public class QueryExecutor
             }
             else
             {
-                result.Notes = "Performance equivalent between Oracle and PostgreSQL";
+                result.Notes = "Performance matches Oracle";
             }
         }
         else if (result.PerformanceDifferencePercent < _thresholdPercent)
         {
             result.Status = PerformanceStatus.Passed;
-            result.Notes = $"PostgreSQL is {result.PerformanceDifferencePercent:F1}% slower but within acceptable range ({_thresholdPercent}%)";
+            result.Notes = $"PostgreSQL is {result.PerformanceDifferencePercent:F1}% slower (within acceptable range)";
         }
         else
         {
             result.Status = PerformanceStatus.Warning;
-            result.Notes = $"PostgreSQL is {result.PerformanceDifferencePercent:F1}% slower than Oracle (threshold: {_thresholdPercent}%)";
+            result.Notes = $"PostgreSQL is {result.PerformanceDifferencePercent:F1}% slower than Oracle";
         }
     }
 
