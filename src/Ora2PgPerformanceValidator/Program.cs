@@ -336,7 +336,7 @@ try
         var reportWriter = new PerformanceReportWriter();
         reportWriter.WriteConsoleReport(summary);
         
-        var schemaPrefix = oracleSchemas.Length > 1 ? $"{oracleSchema.ToLower()}-" : "";
+        var schemaPrefix = $"{oracleSchema.ToLower()}-";
 
         var markdownPath = Path.Combine(reportsDir, $"{schemaPrefix}performance-validation-{timestamp}.md");
         reportWriter.WriteMarkdownReport(summary, markdownPath);

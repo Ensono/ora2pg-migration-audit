@@ -110,7 +110,7 @@ try
     for (int i = 0; i < allComparisonResults.Count; i++)
     {
         var result = allComparisonResults[i];
-        var schemaPrefix = oracleSchemas.Length > 1 ? $"{oracleSchemas[i].ToLower()}-" : "";
+        var schemaPrefix = $"{oracleSchemas[i].ToLower()}-";
 
         var markdownReportPath = Path.Combine(reportsDir, $"{schemaPrefix}schema-comparison-{timestamp}.md");
         markdownWriter.WriteMarkdownReport(result, markdownReportPath);

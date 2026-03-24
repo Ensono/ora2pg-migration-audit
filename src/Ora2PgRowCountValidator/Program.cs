@@ -150,7 +150,7 @@ class Program
 
                 Log.Information("📝 Generating reports...");
 
-                var schemaPrefix = oracleSchemas.Length > 1 ? $"{oracleSchema.ToLower()}-" : "";
+                var schemaPrefix = $"{oracleSchema.ToLower()}-";
                 var baseReportPath = Path.Combine(reportsDir, $"{schemaPrefix}rowcount-validation-{timestamp}");
 
                 var reportWriter = new ValidationReportWriter();

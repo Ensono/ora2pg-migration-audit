@@ -123,7 +123,7 @@ try
 
         Log.Information("📝 Generating validation reports...");
         
-        var schemaPrefix = oracleSchemas.Length > 1 ? $"{oracleSchema.ToLower()}-" : "";
+        var schemaPrefix = $"{oracleSchema.ToLower()}-";
         
         var reportWriter = new ValidationReportWriter();
 
