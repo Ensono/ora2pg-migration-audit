@@ -286,7 +286,11 @@ try
         {
             TestStartTime = DateTime.Now,
             TotalQueries = queryPairs.Count,
-            ThresholdPercent = thresholdPercent
+            ThresholdPercent = thresholdPercent,
+            OracleDatabase = props.Get("ORACLE_SERVICE", ""),
+            PostgresDatabase = props.Get("POSTGRES_DB", ""),
+            OracleSchema = oracleSchema,
+            PostgresSchema = postgresSchema
         };
 
         var testStopwatch = Stopwatch.StartNew();
@@ -336,7 +340,9 @@ try
         var reportWriter = new PerformanceReportWriter();
         reportWriter.WriteConsoleReport(summary);
         
-        var schemaPrefix = $"{oracleSchema.ToLower()}-";
+        var dbName = props.Get("POSTGRES_DB", "").ToLower();
+        var dbPrefix = string.IsNullOrEmpty(dbName) ? "" : $"{dbName}-";
+        var schemaPrefix = $"{dbPrefix}{oracleSchema.ToLower()}-";
 
         var markdownPath = Path.Combine(reportsDir, $"{schemaPrefix}performance-validation-{timestamp}.md");
         reportWriter.WriteMarkdownReport(summary, markdownPath);

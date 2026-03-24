@@ -115,6 +115,24 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
         lines.Add("# Oracle to PostgreSQL Performance Validation Report");
         lines.Add("");
         lines.Add($"**Generated:** {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        
+        if (!string.IsNullOrEmpty(summary.OracleDatabase))
+        {
+            lines.Add($"**Oracle Database:** {summary.OracleDatabase}");
+        }
+        if (!string.IsNullOrEmpty(summary.PostgresDatabase))
+        {
+            lines.Add($"**PostgreSQL Database:** {summary.PostgresDatabase}");
+        }
+        if (!string.IsNullOrEmpty(summary.OracleSchema))
+        {
+            lines.Add($"**Oracle Schema:** {summary.OracleSchema}");
+        }
+        if (!string.IsNullOrEmpty(summary.PostgresSchema))
+        {
+            lines.Add($"**PostgreSQL Schema:** {summary.PostgresSchema}");
+        }
+        
         lines.Add($"**Test Duration:** {summary.TotalTestDurationMs / 1000:F2} seconds");
         lines.Add("");
         lines.Add($"> **Performance Threshold:** Queries with >{summary.ThresholdPercent}% execution time difference are flagged as warnings.");
@@ -694,6 +712,10 @@ public class PerformanceReportWriter : BaseHtmlReportWriter
         <h1>Oracle to PostgreSQL Performance Validation Report</h1>
         <div class='metadata'>
             <p><strong>Generated:</strong> {DateTime.Now:yyyy-MM-dd HH:mm:ss}</p>
+            {(string.IsNullOrEmpty(summary.OracleDatabase) ? "" : $"<p><strong>Oracle Database:</strong> {summary.OracleDatabase}</p>")}
+            {(string.IsNullOrEmpty(summary.PostgresDatabase) ? "" : $"<p><strong>PostgreSQL Database:</strong> {summary.PostgresDatabase}</p>")}
+            {(string.IsNullOrEmpty(summary.OracleSchema) ? "" : $"<p><strong>Oracle Schema:</strong> {summary.OracleSchema}</p>")}
+            {(string.IsNullOrEmpty(summary.PostgresSchema) ? "" : $"<p><strong>PostgreSQL Schema:</strong> {summary.PostgresSchema}</p>")}
             <p><strong>Test Duration:</strong> {summary.TotalTestDurationMs / 1000:F2} seconds</p>
         </div>
 

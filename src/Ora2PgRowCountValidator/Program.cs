@@ -139,6 +139,9 @@ class Program
                     postgresSchema
                 );
 
+                result.OracleDatabase = props.Get("ORACLE_SERVICE", "");
+                result.PostgresDatabase = props.Get("POSTGRES_DB", "");
+
                 stopwatch.Stop();
                 Log.Information($"✓ Comparison completed in {stopwatch.Elapsed.TotalSeconds:F2} seconds");
                 Log.Information($"  - Matches: {result.TablesWithMatchingCounts}");
@@ -150,7 +153,9 @@ class Program
 
                 Log.Information("📝 Generating reports...");
 
-                var schemaPrefix = $"{oracleSchema.ToLower()}-";
+                var dbName = props.Get("POSTGRES_DB", "").ToLower();
+                var dbPrefix = string.IsNullOrEmpty(dbName) ? "" : $"{dbName}-";
+                var schemaPrefix = $"{dbPrefix}{oracleSchema.ToLower()}-";
                 var baseReportPath = Path.Combine(reportsDir, $"{schemaPrefix}rowcount-validation-{timestamp}");
 
                 var reportWriter = new ValidationReportWriter();

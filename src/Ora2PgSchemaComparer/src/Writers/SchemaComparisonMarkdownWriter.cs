@@ -20,6 +20,16 @@ public class SchemaComparisonMarkdownWriter
         sb.AppendLine();
         sb.AppendLine("## Metadata");
         sb.AppendLine();
+        
+        if (!string.IsNullOrEmpty(result.OracleDatabase))
+        {
+            sb.AppendLine($"- **Oracle Database:** {result.OracleDatabase}");
+        }
+        if (!string.IsNullOrEmpty(result.PostgresDatabase))
+        {
+            sb.AppendLine($"- **PostgreSQL Database:** {result.PostgresDatabase}");
+        }
+        
         sb.AppendLine($"- **Source (Oracle):** {result.OracleSchema.SchemaName} schema");
         sb.AppendLine($"- **Target (PostgreSQL):** {result.PostgresSchema.SchemaName} schema");
         sb.AppendLine($"- **Comparison Date:** {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
@@ -55,11 +65,17 @@ public class SchemaComparisonMarkdownWriter
         
         AddMarkdownComparisonRow(sb, "Tables", result.OracleLogicalTableCount, result.PostgresLogicalTableCount);
         AddMarkdownComparisonRow(sb, "Columns", result.OracleLogicalColumnCount, result.PostgresLogicalColumnCount);
+        
+        if (result.DmsRowidColumnCount > 0)
+        {
+            sb.AppendLine($"| DMS Rowid Columns | 0 | {result.DmsRowidColumnCount} | ℹ️ +{result.DmsRowidColumnCount} (expected) |");
+        }
+        
         AddMarkdownComparisonRow(sb, "Primary Keys", result.OracleLogicalPrimaryKeyCount, result.PostgresLogicalPrimaryKeyCount);
         
         if (result.SyntheticPrimaryKeyCount > 0)
         {
-            sb.AppendLine($"| Synthetic PKs (DMS rowid) | 0 | {result.SyntheticPrimaryKeyCount} | \u26A0\uFE0F +{result.SyntheticPrimaryKeyCount} |");
+            sb.AppendLine($"| Synthetic PKs (DMS rowid) | 0 | {result.SyntheticPrimaryKeyCount} | ℹ️ +{result.SyntheticPrimaryKeyCount} (expected) |");
         }
         
         AddMarkdownComparisonRow(sb, "Foreign Keys", result.OracleLogicalForeignKeyCount, result.PostgresLogicalForeignKeyCount);
@@ -110,6 +126,37 @@ public class SchemaComparisonMarkdownWriter
             sb.AppendLine("## \u2705 Perfect Match!");
             sb.AppendLine();
             sb.AppendLine("All schema components match between Oracle and PostgreSQL. No discrepancies found.");
+            sb.AppendLine();
+        }
+        
+        // DMS Artifacts Section (expected items added by DMS)
+        if (result.DmsArtifacts.Any())
+        {
+            sb.AppendLine("---");
+            sb.AppendLine();
+            sb.AppendLine("## ℹ️ DMS Artifacts (Expected)");
+            sb.AppendLine();
+            sb.AppendLine("The following objects were added by DMS and are **expected**:");
+            sb.AppendLine();
+            sb.AppendLine("| Type | Description |");
+            sb.AppendLine("|------|-------------|");
+            
+            foreach (var artifact in result.DmsArtifacts)
+            {
+                // Remove the emoji prefix for the table
+                var cleanArtifact = artifact.Replace("ℹ️ [DMS Expected] ", "");
+                var artifactType = "DMS Artifact";
+                if (cleanArtifact.Contains("rowid column")) artifactType = "Rowid Column";
+                else if (cleanArtifact.Contains("synthetic primary key")) artifactType = "Synthetic PK";
+                else if (cleanArtifact.Contains("rowid sequence")) artifactType = "Rowid Sequence";
+                else if (cleanArtifact.Contains("rowid index")) artifactType = "Rowid Index";
+                
+                sb.AppendLine($"| {artifactType} | {cleanArtifact} |");
+            }
+            sb.AppendLine();
+            sb.AppendLine($"**Total DMS Artifacts:** {result.TotalDmsArtifacts} (synthetic PKs: {result.SyntheticPrimaryKeyCount}, rowid columns: {result.DmsRowidColumnCount}, rowid sequences: {result.DmsRowidSequenceCount}, rowid indexes: {result.DmsRowidIndexCount})");
+            sb.AppendLine();
+            sb.AppendLine("> **Note:** These artifacts are created by DMS for tables without primary keys and do not indicate migration issues.");
             sb.AppendLine();
         }
 

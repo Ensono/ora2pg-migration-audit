@@ -31,6 +31,14 @@ public class DataExtractor
             : props.Get("ORACLE_SKIP_COLUMNS", "");
 
         _columnsToSkip = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        
+        // Always skip DMS-added rowid columns in PostgreSQL
+        if (databaseType == DatabaseType.PostgreSQL)
+        {
+            _columnsToSkip.Add("rowid");
+            Log.Information("Auto-skipping DMS 'rowid' column in PostgreSQL (added by DMS for tables without PK)");
+        }
+        
         if (!string.IsNullOrWhiteSpace(skipColumnsConfig))
         {
             var columns = skipColumnsConfig.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

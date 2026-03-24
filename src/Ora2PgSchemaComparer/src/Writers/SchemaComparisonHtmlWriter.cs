@@ -19,13 +19,22 @@ public class SchemaComparisonHtmlWriter : BaseHtmlReportWriter
 
         sb.Append(GenerateHtmlHeader("Oracle to PostgreSQL Schema Comparison Report"));
 
-        var metadata = new Dictionary<string, string>
+        var metadata = new Dictionary<string, string>();
+        
+        if (!string.IsNullOrEmpty(result.OracleDatabase))
         {
-            { "Oracle Schema", result.OracleSchema.SchemaName },
-            { "PostgreSQL Schema", result.PostgresSchema.SchemaName },
-            { "Comparison Date", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") },
-            { "Overall Grade", result.OverallGrade }
-        };
+            metadata.Add("Oracle Database", result.OracleDatabase);
+        }
+        if (!string.IsNullOrEmpty(result.PostgresDatabase))
+        {
+            metadata.Add("PostgreSQL Database", result.PostgresDatabase);
+        }
+        
+        metadata.Add("Oracle Schema", result.OracleSchema.SchemaName);
+        metadata.Add("PostgreSQL Schema", result.PostgresSchema.SchemaName);
+        metadata.Add("Comparison Date", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        metadata.Add("Overall Grade", result.OverallGrade);
+        
         sb.Append(GenerateMetadataSection(metadata));
 
         var status = result.TotalIssues == 0 ? "PASSED" : 
@@ -67,15 +76,26 @@ public class SchemaComparisonHtmlWriter : BaseHtmlReportWriter
         
         AddComparisonRow(sb, "Tables", result.OracleLogicalTableCount, result.PostgresLogicalTableCount);
         AddComparisonRow(sb, "Columns", result.OracleLogicalColumnCount, result.PostgresLogicalColumnCount);
+        
+        if (result.DmsRowidColumnCount > 0)
+        {
+            sb.AppendLine("            <tr class=\"info\">");
+            sb.AppendLine("                <td>DMS Rowid Columns</td>");
+            sb.AppendLine("                <td class=\"number\">0</td>");
+            sb.AppendLine($"                <td class=\"number\">{result.DmsRowidColumnCount}</td>");
+            sb.AppendLine($"                <td class=\"number\">ℹ️ +{result.DmsRowidColumnCount} (expected)</td>");
+            sb.AppendLine("            </tr>");
+        }
+        
         AddComparisonRow(sb, "Primary Keys", result.OracleLogicalPrimaryKeyCount, result.PostgresLogicalPrimaryKeyCount);
         
         if (result.SyntheticPrimaryKeyCount > 0)
         {
-            sb.AppendLine("            <tr class=\"warning\">");
+            sb.AppendLine("            <tr class=\"info\">");
             sb.AppendLine("                <td>Synthetic PKs (DMS rowid)</td>");
             sb.AppendLine("                <td class=\"number\">0</td>");
             sb.AppendLine($"                <td class=\"number\">{result.SyntheticPrimaryKeyCount}</td>");
-            sb.AppendLine($"                <td class=\"number\">+{result.SyntheticPrimaryKeyCount}</td>");
+            sb.AppendLine($"                <td class=\"number\">ℹ️ +{result.SyntheticPrimaryKeyCount} (expected)</td>");
             sb.AppendLine("            </tr>");
         }
         
@@ -118,6 +138,33 @@ public class SchemaComparisonHtmlWriter : BaseHtmlReportWriter
         {
             sb.AppendLine("        <div class=\"detail-box\">");
             sb.AppendLine("            <p style=\"color: #28a745; font-size: 1.1em;\">\u2705 <strong>Perfect Match!</strong> All schema components match between Oracle and PostgreSQL.</p>");
+            sb.AppendLine("        </div>");
+        }
+        
+        // DMS Artifacts Section (expected items added by DMS)
+        if (result.DmsArtifacts.Any())
+        {
+            sb.AppendLine("        <div class=\"detail-box\" style=\"border-left-color: #17a2b8; margin-top: 30px;\">");
+            sb.AppendLine("            <h3 style=\"color: #0c5460; margin-top: 0;\">ℹ️ DMS Artifacts (Expected)</h3>");
+            sb.AppendLine("            <p>The following objects were added by DMS and are <strong>expected</strong>:</p>");
+            sb.AppendLine("            <table>");
+            sb.AppendLine("                <tr><th>Type</th><th>Description</th></tr>");
+            
+            foreach (var artifact in result.DmsArtifacts)
+            {
+                var cleanArtifact = artifact.Replace("ℹ️ [DMS Expected] ", "");
+                var artifactType = "DMS Artifact";
+                if (cleanArtifact.Contains("rowid column")) artifactType = "Rowid Column";
+                else if (cleanArtifact.Contains("synthetic primary key")) artifactType = "Synthetic PK";
+                else if (cleanArtifact.Contains("rowid sequence")) artifactType = "Rowid Sequence";
+                else if (cleanArtifact.Contains("rowid index")) artifactType = "Rowid Index";
+                
+                sb.AppendLine($"                <tr class=\"info\"><td>{artifactType}</td><td>{cleanArtifact}</td></tr>");
+            }
+            
+            sb.AppendLine("            </table>");
+            sb.AppendLine($"            <p><strong>Total DMS Artifacts:</strong> {result.TotalDmsArtifacts} (synthetic PKs: {result.SyntheticPrimaryKeyCount}, rowid columns: {result.DmsRowidColumnCount}, rowid sequences: {result.DmsRowidSequenceCount}, rowid indexes: {result.DmsRowidIndexCount})</p>");
+            sb.AppendLine("            <p><em>Note: These artifacts are created by DMS for tables without primary keys and do not indicate migration issues.</em></p>");
             sb.AppendLine("        </div>");
         }
 

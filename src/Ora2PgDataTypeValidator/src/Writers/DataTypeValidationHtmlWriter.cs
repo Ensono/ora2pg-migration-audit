@@ -24,13 +24,22 @@ public class DataTypeValidationHtmlWriter : BaseHtmlReportWriter
         sb.AppendLine("            <p style=\"margin: 5px 0 0 0; color: #555;\">Validates against actual GCP Database Migration Service conversion patterns extracted from production migrations.</p>");
         sb.AppendLine("        </div>");
 
-        var metadata = new Dictionary<string, string>
+        var metadata = new Dictionary<string, string>();
+        
+        if (!string.IsNullOrEmpty(result.OracleDatabase))
         {
-            { "Oracle Schema", result.OracleSchema },
-            { "PostgreSQL Schema", result.PostgresSchema },
-            { "Validation Time", result.ValidationTime.ToString("yyyy-MM-dd HH:mm:ss") },
-            { "Total Columns Validated", result.TotalColumnsValidated.ToString("N0") }
-        };
+            metadata.Add("Oracle Database", result.OracleDatabase);
+        }
+        if (!string.IsNullOrEmpty(result.PostgresDatabase))
+        {
+            metadata.Add("PostgreSQL Database", result.PostgresDatabase);
+        }
+        
+        metadata.Add("Oracle Schema", result.OracleSchema);
+        metadata.Add("PostgreSQL Schema", result.PostgresSchema);
+        metadata.Add("Validation Time", result.ValidationTime.ToString("yyyy-MM-dd HH:mm:ss"));
+        metadata.Add("Total Columns Validated", result.TotalColumnsValidated.ToString("N0"));
+        
         sb.Append(GenerateMetadataSection(metadata));
 
         sb.Append(GenerateStatusBadge(result.OverallStatus));

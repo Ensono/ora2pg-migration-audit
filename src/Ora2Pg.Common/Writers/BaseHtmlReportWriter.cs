@@ -22,11 +22,15 @@ public abstract class BaseHtmlReportWriter
         th { background-color: #4CAF50; color: white; padding: 12px; text-align: left; font-weight: bold; }
         td { padding: 10px; border-bottom: 1px solid #ddd; }
         tr:hover { background-color: #f5f5f5; }
+        tr.match { background-color: transparent; }
+        tr.match td { color: #333; }
         tr.warning { background-color: #fff3cd; }
-        tr.warning td { color: #000; }
+        tr.warning td { color: #856404; }
+        tr.mismatch { background-color: #f8d7da; }
+        tr.mismatch td { color: #721c24; }
         .match { color: #28a745; }
         .mismatch { color: #dc3545; font-weight: bold; }
-        .warning { color: #ffc107; }
+        .warning { color: #856404; }
         .info { color: #17a2b8; }
         .number { text-align: right; font-family: 'Courier New', monospace; }
         .pk-list { margin: 5px 0; padding: 10px; background-color: #fff3cd; border-left: 4px solid #ffc107; }

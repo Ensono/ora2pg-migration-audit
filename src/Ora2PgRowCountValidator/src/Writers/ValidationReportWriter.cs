@@ -25,6 +25,16 @@ public class ValidationReportWriter
         sb.AppendLine("# Oracle to PostgreSQL Row Count Validation Report");
         sb.AppendLine();
         sb.AppendLine($"**Generated:** {result.ValidationTime:yyyy-MM-dd HH:mm:ss}");
+        
+        if (!string.IsNullOrEmpty(result.OracleDatabase))
+        {
+            sb.AppendLine($"**Oracle Database:** {result.OracleDatabase}");
+        }
+        if (!string.IsNullOrEmpty(result.PostgresDatabase))
+        {
+            sb.AppendLine($"**PostgreSQL Database:** {result.PostgresDatabase}");
+        }
+        
         sb.AppendLine($"**Oracle Schema:** {result.OracleSchema}");
         sb.AppendLine($"**PostgreSQL Schema:** {result.PostgresSchema}");
         sb.AppendLine();
@@ -44,11 +54,22 @@ public class ValidationReportWriter
         sb.AppendLine($"| **Row Difference** | **{Math.Abs(result.TotalPostgresRows - result.TotalOracleRows):N0}** |");
         sb.AppendLine();
 
+        // Add severity summary with threshold explanations
+        sb.AppendLine("### Severity Breakdown");
+        sb.AppendLine();
+        sb.AppendLine("| Severity | Count | Description |");
+        sb.AppendLine("|----------|-------|-------------|");
+        sb.AppendLine($"| \u274C Critical Issues | {result.CriticalIssues} | >10% row count difference |");
+        sb.AppendLine($"| \U0001F534 Errors | {result.Errors} | 1-10% row count difference |");
+        sb.AppendLine($"| \u26A0\uFE0F Warnings | {result.Warnings} | <1% row count difference |");
+        sb.AppendLine($"| \u2139\uFE0F Info | {result.InfoMessages} | Matching counts |");
+        sb.AppendLine();
+
         if (result.Issues.Any())
         {
-            WriteSeveritySection(sb, result, ValidationSeverity.Critical, "\u274C Critical Issues");  // ❌
-            WriteSeveritySection(sb, result, ValidationSeverity.Error, "\U0001F534 Errors");  // 🔴
-            WriteSeveritySection(sb, result, ValidationSeverity.Warning, "\u26A0\uFE0F Warnings");  // ⚠️
+            WriteSeveritySection(sb, result, ValidationSeverity.Critical, "\u274C Critical Issues (>10% row count difference)");  // ❌
+            WriteSeveritySection(sb, result, ValidationSeverity.Error, "\U0001F534 Errors (1-10% row count difference)");  // 🔴
+            WriteSeveritySection(sb, result, ValidationSeverity.Warning, "\u26A0\uFE0F Warnings (<1% row count difference)");  // ⚠️
             WriteSeveritySection(sb, result, ValidationSeverity.Info, "\u2139\uFE0F Tables with Matching Counts");  // ℹ️
         }
 
@@ -67,6 +88,16 @@ public class ValidationReportWriter
         sb.AppendLine("===============================================================================");
         sb.AppendLine();
         sb.AppendLine($"Generated:          {result.ValidationTime:yyyy-MM-dd HH:mm:ss}");
+        
+        if (!string.IsNullOrEmpty(result.OracleDatabase))
+        {
+            sb.AppendLine($"Oracle Database:    {result.OracleDatabase}");
+        }
+        if (!string.IsNullOrEmpty(result.PostgresDatabase))
+        {
+            sb.AppendLine($"PostgreSQL Database:{result.PostgresDatabase}");
+        }
+        
         sb.AppendLine($"Oracle Schema:      {result.OracleSchema}");
         sb.AppendLine($"PostgreSQL Schema:  {result.PostgresSchema}");
         sb.AppendLine();
@@ -86,11 +117,20 @@ public class ValidationReportWriter
         sb.AppendLine($"Row Difference:                 {Math.Abs(result.TotalPostgresRows - result.TotalOracleRows):N0}");
         sb.AppendLine();
 
+        sb.AppendLine("-------------------------------------------------------------------------------");
+        sb.AppendLine("  SEVERITY BREAKDOWN");
+        sb.AppendLine("-------------------------------------------------------------------------------");
+        sb.AppendLine($"Critical Issues:    {result.CriticalIssues,5}  (>10% row count difference)");
+        sb.AppendLine($"Errors:             {result.Errors,5}  (1-10% row count difference)");
+        sb.AppendLine($"Warnings:           {result.Warnings,5}  (<1% row count difference)");
+        sb.AppendLine($"Info:               {result.InfoMessages,5}  (matching counts)");
+        sb.AppendLine();
+
         if (result.Issues.Any())
         {
-            WriteSeveritySectionText(sb, result, ValidationSeverity.Critical, "CRITICAL ISSUES");
-            WriteSeveritySectionText(sb, result, ValidationSeverity.Error, "ERRORS");
-            WriteSeveritySectionText(sb, result, ValidationSeverity.Warning, "WARNINGS");
+            WriteSeveritySectionText(sb, result, ValidationSeverity.Critical, "CRITICAL ISSUES (>10% row count difference)");
+            WriteSeveritySectionText(sb, result, ValidationSeverity.Error, "ERRORS (1-10% row count difference)");
+            WriteSeveritySectionText(sb, result, ValidationSeverity.Warning, "WARNINGS (<1% row count difference)");
             WriteSeveritySectionText(sb, result, ValidationSeverity.Info, "TABLES WITH MATCHING COUNTS");
         }
 

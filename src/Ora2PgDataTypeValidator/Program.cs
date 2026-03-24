@@ -116,6 +116,10 @@ try
         var postgresColumns = await postgresExtractor.ExtractColumnsAsync(postgresSchema);
 
         var result = validator.Validate(oracleColumns, postgresColumns);
+        
+        result.OracleDatabase = props.Get("ORACLE_SERVICE", "");
+        result.PostgresDatabase = props.Get("POSTGRES_DB", "");
+        
         allSchemaResults.Add((oracleSchema, postgresSchema, result));
         
         Log.Debug("Added result for schema pair: {OracleSchema} → {PostgresSchema}. Total results: {Count}", 
@@ -123,7 +127,9 @@ try
 
         Log.Information("📝 Generating validation reports...");
         
-        var schemaPrefix = $"{oracleSchema.ToLower()}-";
+        var dbName = props.Get("POSTGRES_DB", "").ToLower();
+        var dbPrefix = string.IsNullOrEmpty(dbName) ? "" : $"{dbName}-";
+        var schemaPrefix = $"{dbPrefix}{oracleSchema.ToLower()}-";
         
         var reportWriter = new ValidationReportWriter();
 

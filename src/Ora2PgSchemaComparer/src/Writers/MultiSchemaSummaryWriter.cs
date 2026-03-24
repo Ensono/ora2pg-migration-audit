@@ -82,10 +82,17 @@ public class MultiSchemaSummaryWriter
         var totalTables = allResults.Sum(r => r.Result.OracleLogicalTableCount);
         var totalColumns = allResults.Sum(r => r.Result.OracleLogicalColumnCount);
         var totalIssues = allResults.Sum(r => r.Result.TotalIssues);
+        var totalDmsArtifacts = allResults.Sum(r => r.Result.TotalDmsArtifacts);
         
         writer.WriteLine($"- **Total Tables Compared:** {totalTables:N0}");
         writer.WriteLine($"- **Total Columns Compared:** {totalColumns:N0}");
         writer.WriteLine($"- **Total Issues Found:** {totalIssues:N0}");
+        
+        if (totalDmsArtifacts > 0)
+        {
+            writer.WriteLine($"- **DMS Artifacts (Expected):** {totalDmsArtifacts:N0}");
+        }
+        
         writer.WriteLine();
     }
 
@@ -93,8 +100,8 @@ public class MultiSchemaSummaryWriter
     {
         writer.WriteLine("## Schema Breakdown");
         writer.WriteLine();
-        writer.WriteLine("| Schema | Grade | Tables | Columns | Issues | Status |");
-        writer.WriteLine("|--------|-------|--------|---------|--------|--------|");
+        writer.WriteLine("| Schema | Grade | Tables | Columns | Issues | DMS Artifacts | Status |");
+        writer.WriteLine("|--------|-------|--------|---------|--------|---------------|--------|");
         
         foreach (var (oracleSchema, postgresSchema, result) in allResults.OrderBy(r => r.OracleSchema))
         {
@@ -108,6 +115,7 @@ public class MultiSchemaSummaryWriter
             var tables = result.OracleLogicalTableCount;
             var columns = result.OracleLogicalColumnCount;
             var issues = result.TotalIssues;
+            var dmsArtifacts = result.TotalDmsArtifacts;
             
             var status = grade.StartsWith("A") ? "Excellent" :
                         grade.StartsWith("B") ? "Good" :
@@ -115,7 +123,8 @@ public class MultiSchemaSummaryWriter
                         grade == "D" ? "Needs Attention" :
                         grade == "F" ? "Critical Issues" : "Unknown";
             
-            writer.WriteLine($"| {oracleSchema} → {postgresSchema.ToLower()} | {gradeIcon} {grade} | {tables} | {columns} | {issues} | {status} |");
+            var dmsDisplay = dmsArtifacts > 0 ? $"ℹ️ {dmsArtifacts}" : "-";
+            writer.WriteLine($"| {oracleSchema} → {postgresSchema.ToLower()} | {gradeIcon} {grade} | {tables} | {columns} | {issues} | {dmsDisplay} | {status} |");
         }
         
         writer.WriteLine();

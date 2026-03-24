@@ -57,6 +57,10 @@ public class QueryExecutor
             StringComparer.OrdinalIgnoreCase
         );
         
+        // Always skip DMS-added rowid columns in PostgreSQL (added by DMS for tables without PK)
+        _postgresSkipColumns.Add("rowid");
+        _logger.Information("Auto-skipping DMS 'rowid' column in PostgreSQL performance queries");
+        
         if (_oracleSkipColumns.Any())
         {
             _logger.Information("Oracle columns to skip: {Columns}", string.Join(", ", _oracleSkipColumns));

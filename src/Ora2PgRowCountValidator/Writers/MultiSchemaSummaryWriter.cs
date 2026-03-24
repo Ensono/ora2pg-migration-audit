@@ -88,6 +88,22 @@ public class MultiSchemaSummaryWriter
         var rowDiff = totalOracleRows - totalPostgresRows;
         writer.WriteLine($"| **Row Difference** | **{rowDiff:N0}** |");
         writer.WriteLine();
+
+        // Aggregate severity counts across all schemas
+        var totalCritical = allResults.Sum(r => r.Result.CriticalIssues);
+        var totalErrors = allResults.Sum(r => r.Result.Errors);
+        var totalWarnings = allResults.Sum(r => r.Result.Warnings);
+        var totalInfo = allResults.Sum(r => r.Result.InfoMessages);
+
+        writer.WriteLine("### Severity Breakdown (All Schemas)");
+        writer.WriteLine();
+        writer.WriteLine("| Severity | Count | Description |");
+        writer.WriteLine("|----------|-------|-------------|");
+        writer.WriteLine($"| ❌ Critical Issues | {totalCritical} | >10% row count difference |");
+        writer.WriteLine($"| 🔴 Errors | {totalErrors} | 1-10% row count difference |");
+        writer.WriteLine($"| ⚠️ Warnings | {totalWarnings} | <1% row count difference |");
+        writer.WriteLine($"| ℹ️ Info | {totalInfo} | Matching counts |");
+        writer.WriteLine();
     }
 
     private void WriteSchemaBreakdown(StreamWriter writer, List<(string OracleSchema, string PostgresSchema, ValidationResult Result)> allResults)

@@ -8,6 +8,8 @@ public class ComparisonReportWriter
 {
     private readonly string _reportsDir;
     private const int ReportLineWidth = 100;
+    private string _oracleDatabase = string.Empty;
+    private string _postgresDatabase = string.Empty;
 
     public ComparisonReportWriter()
     {
@@ -17,6 +19,14 @@ public class ComparisonReportWriter
     
     public string GenerateDetailedReport(List<ComparisonResult> results, string schemaPrefix = "")
     {
+        return GenerateDetailedReport(results, schemaPrefix, string.Empty, string.Empty);
+    }
+    
+    public string GenerateDetailedReport(List<ComparisonResult> results, string schemaPrefix, string oracleDatabase, string postgresDatabase)
+    {
+        _oracleDatabase = oracleDatabase;
+        _postgresDatabase = postgresDatabase;
+        
         if (!Directory.Exists(_reportsDir))
         {
             Directory.CreateDirectory(_reportsDir);
@@ -43,6 +53,16 @@ public class ComparisonReportWriter
         writer.WriteLine(new string('=', ReportLineWidth));
         writer.WriteLine();
         writer.WriteLine($"Report Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        
+        if (!string.IsNullOrEmpty(_oracleDatabase))
+        {
+            writer.WriteLine($"Oracle Database:  {_oracleDatabase}");
+        }
+        if (!string.IsNullOrEmpty(_postgresDatabase))
+        {
+            writer.WriteLine($"PostgreSQL Database: {_postgresDatabase}");
+        }
+        
         writer.WriteLine();
     }
 

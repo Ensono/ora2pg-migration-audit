@@ -23,6 +23,11 @@ public class PostgresColumnExtractor
         _objectFilter = ObjectFilter.FromProperties(props);
 
         _columnsToSkip = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        
+        // Always skip DMS-added rowid columns
+        _columnsToSkip.Add("rowid");
+        Log.Information("Auto-skipping DMS 'rowid' column in PostgreSQL (added by DMS for tables without PK)");
+        
         if (!string.IsNullOrWhiteSpace(skipColumnsConfig))
         {
             var columns = skipColumnsConfig.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -30,7 +35,7 @@ public class PostgresColumnExtractor
             {
                 _columnsToSkip.Add(column);
             }
-            Log.Information("Columns to skip in PostgreSQL: {Columns}", string.Join(", ", _columnsToSkip));
+            Log.Information("Additional columns to skip in PostgreSQL: {Columns}", string.Join(", ", _columnsToSkip.Where(c => !c.Equals("rowid", StringComparison.OrdinalIgnoreCase))));
         }
     }
 

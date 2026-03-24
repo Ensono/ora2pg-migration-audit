@@ -6,8 +6,18 @@ namespace Ora2PgDataValidator.src.Writers;
 
 public class DataValidationMarkdownWriter
 {
+    private string _oracleDatabase = string.Empty;
+    private string _postgresDatabase = string.Empty;
+    
     public void WriteMarkdownReport(List<ComparisonResult> results, string outputPath)
     {
+        WriteMarkdownReport(results, outputPath, string.Empty, string.Empty);
+    }
+    
+    public void WriteMarkdownReport(List<ComparisonResult> results, string outputPath, string oracleDatabase, string postgresDatabase)
+    {
+        _oracleDatabase = oracleDatabase;
+        _postgresDatabase = postgresDatabase;
         var markdown = GenerateMarkdown(results);
         File.WriteAllText(outputPath, markdown);
     }
@@ -39,6 +49,16 @@ public class DataValidationMarkdownWriter
         sb.AppendLine("## Metadata");
         sb.AppendLine();
         sb.AppendLine($"- **Validation Date:** {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        
+        if (!string.IsNullOrEmpty(_oracleDatabase))
+        {
+            sb.AppendLine($"- **Oracle Database:** {_oracleDatabase}");
+        }
+        if (!string.IsNullOrEmpty(_postgresDatabase))
+        {
+            sb.AppendLine($"- **PostgreSQL Database:** {_postgresDatabase}");
+        }
+        
         sb.AppendLine($"- **Total Objects Compared:** {totalObjects} ({totalTables} tables, {totalViews} views)");
         sb.AppendLine($"- **Overall Match Percentage:** {overallMatchPercentage:F2}%");
         sb.AppendLine($"- **Status:** {statusIcon} {status}");

@@ -7,8 +7,18 @@ namespace Ora2PgDataValidator.src.Writers;
 
 public class DataValidationHtmlWriter : BaseHtmlReportWriter
 {
+    private string _oracleDatabase = string.Empty;
+    private string _postgresDatabase = string.Empty;
+    
     public void WriteHtmlReport(List<ComparisonResult> results, string outputPath)
     {
+        WriteHtmlReport(results, outputPath, string.Empty, string.Empty);
+    }
+
+    public void WriteHtmlReport(List<ComparisonResult> results, string outputPath, string oracleDatabase, string postgresDatabase)
+    {
+        _oracleDatabase = oracleDatabase;
+        _postgresDatabase = postgresDatabase;
         var html = GenerateHtml(results);
         File.WriteAllText(outputPath, html);
     }
@@ -17,7 +27,6 @@ public class DataValidationHtmlWriter : BaseHtmlReportWriter
     {
         var sb = new StringBuilder();
         
-
         sb.Append(GenerateHtmlHeader("Oracle to PostgreSQL Data Fingerprint Validation Report"));
 
         int totalObjects = results.Count;
@@ -37,12 +46,21 @@ public class DataValidationHtmlWriter : BaseHtmlReportWriter
             ? (double)totalMatchingRows / totalSourceRows * 100.0 
             : 0.0;
 
-        var metadata = new Dictionary<string, string>
+        var metadata = new Dictionary<string, string>();
+        
+        if (!string.IsNullOrEmpty(_oracleDatabase))
         {
-            { "Validation Date", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") },
-            { "Total Objects Compared", $"{totalObjects:N0} ({totalTables} tables, {totalViews} views)" },
-            { "Overall Match Percentage", $"{overallMatchPercentage:F2}%" }
-        };
+            metadata.Add("Oracle Database", _oracleDatabase);
+        }
+        if (!string.IsNullOrEmpty(_postgresDatabase))
+        {
+            metadata.Add("PostgreSQL Database", _postgresDatabase);
+        }
+        
+        metadata.Add("Validation Date", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        metadata.Add("Total Objects Compared", $"{totalObjects:N0} ({totalTables} tables, {totalViews} views)");
+        metadata.Add("Overall Match Percentage", $"{overallMatchPercentage:F2}%");
+        
         sb.Append(GenerateMetadataSection(metadata));
 
         var status = errorObjects > 0 ? "FAILED" : 

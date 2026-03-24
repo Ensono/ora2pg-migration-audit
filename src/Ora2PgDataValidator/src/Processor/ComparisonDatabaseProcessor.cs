@@ -17,6 +17,8 @@ public class ComparisonDatabaseProcessor
     private readonly string _hashAlgorithm;
     private readonly int _batchSize;
     private readonly int _fetchSize;
+    private readonly string _oracleDatabase;
+    private readonly string _postgresDatabase;
 
     public ComparisonDatabaseProcessor(DatabaseConnectionManager connectionManager)
     {
@@ -28,6 +30,8 @@ public class ComparisonDatabaseProcessor
         _hashAlgorithm = props.Get("HASH_ALGORITHM", props.Get("hash.algorithm", "SHA256"));
         _batchSize = props.GetInt("BATCH_SIZE", props.GetInt("batch.size", 5000));
         _fetchSize = props.GetInt("FETCH_SIZE", props.GetInt("fetch.size", 1000));
+        _oracleDatabase = props.Get("ORACLE_SERVICE", "");
+        _postgresDatabase = props.Get("POSTGRES_DB", "");
     }
 
 
@@ -110,10 +114,13 @@ public class ComparisonDatabaseProcessor
             var props = ApplicationProperties.Instance;
             var reportsDir = props.GetReportsDirectory("Ora2PgDataValidator");
 
+            var dbName = _postgresDatabase.ToLower();
+            var dbPrefix = string.IsNullOrEmpty(dbName) ? "" : $"{dbName}-";
+            
             var schemaPrefix = "";
             if (!string.IsNullOrWhiteSpace(schemaName))
             {
-                schemaPrefix = $"{schemaName.ToLower()}-";
+                schemaPrefix = $"{dbPrefix}{schemaName.ToLower()}-";
             }
             else if (tableMapping.Any())
             {
@@ -121,21 +128,25 @@ public class ComparisonDatabaseProcessor
                 if (firstOracleTable.Contains('.'))
                 {
                     var schema = firstOracleTable.Split('.')[0].ToLower();
-                    schemaPrefix = $"{schema}-";
+                    schemaPrefix = $"{dbPrefix}{schema}-";
                 }
+            }
+            else
+            {
+                schemaPrefix = dbPrefix;
             }
 
             var markdownWriter = new DataValidationMarkdownWriter();
             var markdownReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.md");
-            markdownWriter.WriteMarkdownReport(allResults, markdownReportPath);
+            markdownWriter.WriteMarkdownReport(allResults, markdownReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Markdown report saved to: {ReportPath}", markdownReportPath);
 
-            string textReportPath = _reportWriter.GenerateDetailedReport(allResults, schemaPrefix);
+            string textReportPath = _reportWriter.GenerateDetailedReport(allResults, schemaPrefix, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Text report saved to: {ReportPath}", textReportPath);
 
             var htmlWriter = new DataValidationHtmlWriter();
             var htmlReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.html");
-            htmlWriter.WriteHtmlReport(allResults, htmlReportPath);
+            htmlWriter.WriteHtmlReport(allResults, htmlReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 HTML report saved to: {ReportPath}", htmlReportPath);
         }
         catch (Exception ex)
@@ -236,10 +247,13 @@ public class ComparisonDatabaseProcessor
             var props = ApplicationProperties.Instance;
             var reportsDir = props.GetReportsDirectory("Ora2PgDataValidator");
 
+            var dbName = _postgresDatabase.ToLower();
+            var dbPrefix = string.IsNullOrEmpty(dbName) ? "" : $"{dbName}-";
+            
             var schemaPrefix = "";
             if (!string.IsNullOrWhiteSpace(schemaName))
             {
-                schemaPrefix = $"{schemaName.ToLower()}-";
+                schemaPrefix = $"{dbPrefix}{schemaName.ToLower()}-";
             }
             else if (objectMapping.Any())
             {
@@ -247,21 +261,25 @@ public class ComparisonDatabaseProcessor
                 if (firstSourceObject.Contains('.'))
                 {
                     var schema = firstSourceObject.Split('.')[0].ToLower();
-                    schemaPrefix = $"{schema}-";
+                    schemaPrefix = $"{dbPrefix}{schema}-";
                 }
+            }
+            else
+            {
+                schemaPrefix = dbPrefix;
             }
 
             var markdownWriter = new DataValidationMarkdownWriter();
             var markdownReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.md");
-            markdownWriter.WriteMarkdownReport(allResults, markdownReportPath);
+            markdownWriter.WriteMarkdownReport(allResults, markdownReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Markdown report saved to: {ReportPath}", markdownReportPath);
 
-            string textReportPath = _reportWriter.GenerateDetailedReport(allResults, schemaPrefix);
+            string textReportPath = _reportWriter.GenerateDetailedReport(allResults, schemaPrefix, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Text report saved to: {ReportPath}", textReportPath);
 
             var htmlWriter = new DataValidationHtmlWriter();
             var htmlReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.html");
-            htmlWriter.WriteHtmlReport(allResults, htmlReportPath);
+            htmlWriter.WriteHtmlReport(allResults, htmlReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 HTML report saved to: {ReportPath}", htmlReportPath);
         }
         catch (Exception ex)

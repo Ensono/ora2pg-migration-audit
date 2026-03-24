@@ -86,6 +86,10 @@ try
 
         Log.Information("Comparing schemas...");
         var comparisonResult = comparator.Compare(oracleSchemaDefinition, postgresSchemaDefinition);
+        
+        comparisonResult.OracleDatabase = props.Get("ORACLE_SERVICE", "");
+        comparisonResult.PostgresDatabase = props.Get("POSTGRES_DB", "");
+        
         allComparisonResults.Add(comparisonResult);
         allSchemaResults.Add((oracleSchema, postgresSchema, comparisonResult));
 
@@ -106,11 +110,14 @@ try
 
     bool hasCriticalIssues = false;
     var allReportsText = new System.Text.StringBuilder();
+    
+    var dbName = props.Get("POSTGRES_DB", "").ToLower();
+    var dbPrefix = string.IsNullOrEmpty(dbName) ? "" : $"{dbName}-";
 
     for (int i = 0; i < allComparisonResults.Count; i++)
     {
         var result = allComparisonResults[i];
-        var schemaPrefix = $"{oracleSchemas[i].ToLower()}-";
+        var schemaPrefix = $"{dbPrefix}{oracleSchemas[i].ToLower()}-";
 
         var markdownReportPath = Path.Combine(reportsDir, $"{schemaPrefix}schema-comparison-{timestamp}.md");
         markdownWriter.WriteMarkdownReport(result, markdownReportPath);
