@@ -115,7 +115,7 @@ try
         Log.Information($"📊 Extracting column metadata from PostgreSQL schema: {postgresSchema}");
         var postgresColumns = await postgresExtractor.ExtractColumnsAsync(postgresSchema);
 
-        var result = validator.Validate(oracleColumns, postgresColumns);
+        var result = validator.Validate(oracleColumns, postgresColumns, oracleSchema, postgresSchema);
         
         result.OracleDatabase = props.Get("ORACLE_SERVICE", "");
         result.PostgresDatabase = props.Get("POSTGRES_DB", "");

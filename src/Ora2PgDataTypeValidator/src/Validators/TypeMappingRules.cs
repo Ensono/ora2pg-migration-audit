@@ -191,6 +191,7 @@ public static class TypeMappingRules
         {
             "varchar" => "character varying",
             "char" when !baseType.Contains("character") => "character",
+            "bpchar" => "character",  // bpchar is PostgreSQL's internal name for fixed-length character type
             "int" => "integer",
             "int2" => "smallint",
             "int4" => "integer",
@@ -222,10 +223,14 @@ public static class TypeMappingRules
         if (expectedBase == "varchar" && (actualBase == "character varying" || actualBase.StartsWith("varchar")))
             return true;
         
-        if (expectedBase == "character" && (actualBase.StartsWith("character") && !actualBase.Contains("varying") || actualBase == "char"))
+        if (expectedBase == "character" && (actualBase.StartsWith("character") && !actualBase.Contains("varying") || actualBase == "char" || actualBase == "bpchar"))
             return true;
         
-        if (expectedBase == "char" && (actualBase == "character" || actualBase.StartsWith("char")))
+        if (expectedBase == "char" && (actualBase == "character" || actualBase.StartsWith("char") || actualBase == "bpchar"))
+            return true;
+        
+        // bpchar is PostgreSQL's internal name for fixed-length CHAR type
+        if (expectedBase == "bpchar" && (actualBase == "character" || actualBase == "char" || actualBase == "bpchar"))
             return true;
         
         if (expectedBase == "numeric" && (actualBase.StartsWith("numeric") || actualBase.StartsWith("decimal")))

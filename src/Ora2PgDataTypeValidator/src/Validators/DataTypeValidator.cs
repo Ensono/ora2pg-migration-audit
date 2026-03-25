@@ -9,7 +9,9 @@ public class DataTypeValidator
 
     public ValidationResult Validate(
         List<ColumnMetadata> oracleColumns,
-        List<ColumnMetadata> postgresColumns)
+        List<ColumnMetadata> postgresColumns,
+        string oracleSchema,
+        string postgresSchema)
     {
         _issues.Clear();
         
@@ -37,8 +39,8 @@ public class DataTypeValidator
 
         return new ValidationResult
         {
-            OracleSchema = oracleColumns.FirstOrDefault()?.SchemaName ?? "UNKNOWN",
-            PostgresSchema = postgresColumns.FirstOrDefault()?.SchemaName ?? "unknown",
+            OracleSchema = oracleSchema,
+            PostgresSchema = postgresSchema,
             Issues = _issues,
             TotalColumnsValidated = validated
         };
@@ -254,7 +256,7 @@ public class DataTypeValidator
                 "Oracle pads with spaces; PostgreSQL doesn't.",
                 "Verify ETL logic handles space trimming correctly");
         }
-        else if (!baseType.StartsWith("character") && baseType != "char")
+        else if (!baseType.StartsWith("character") && baseType != "char" && baseType != "bpchar")
         {
             AddIssue(oracle, postgres, ValidationSeverity.Error, "Fixed-Length Type Mismatch",
                 $"CHAR should map to CHAR(n), not {postgresType.ToUpper()}.",
@@ -481,7 +483,8 @@ public class DataTypeValidator
 
         if (oracleType == "NCHAR")
         {
-            if (!postgresType.StartsWith("character") && postgresType != "char")
+            // Check if postgres type is a valid CHAR type (character, char, bpchar - with optional length)
+            if (!postgresType.StartsWith("character") && !postgresType.StartsWith("char") && !postgresType.StartsWith("bpchar"))
             {
                 AddIssue(oracle, postgres, ValidationSeverity.Error, "National Fixed String",
                     "Oracle NCHAR should map to CHAR in PostgreSQL.",
