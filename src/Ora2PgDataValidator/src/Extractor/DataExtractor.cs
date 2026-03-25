@@ -31,6 +31,14 @@ public class DataExtractor
             : props.Get("ORACLE_SKIP_COLUMNS", "");
 
         _columnsToSkip = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        
+        // Always skip DMS-added rowid columns in PostgreSQL
+        if (databaseType == DatabaseType.PostgreSQL)
+        {
+            _columnsToSkip.Add("rowid");
+            Log.Information("Auto-skipping DMS 'rowid' column in PostgreSQL (added by DMS for tables without PK)");
+        }
+        
         if (!string.IsNullOrWhiteSpace(skipColumnsConfig))
         {
             var columns = skipColumnsConfig.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -379,11 +387,32 @@ public class DataExtractor
         string orderByClause;
         if (metadata.PrimaryKeyColumns.Count > 0)
         {
-            orderByClause = string.Join(", ", metadata.PrimaryKeyColumns);
+            orderByClause = string.Join(", ", metadata.PrimaryKeyColumns.Select(pk => $"{QuoteIdentifier(pk)} DESC"));
+            Log.Debug("Ordering by primary key columns (DESC): {OrderBy}", orderByClause);
         }
         else
         {
-            orderByClause = "1";
+            var idColumn = metadata.Columns.FirstOrDefault(c =>
+                c.Name.Equals("id", StringComparison.OrdinalIgnoreCase) ||
+                c.Name.Equals("ID", StringComparison.OrdinalIgnoreCase) ||
+                c.Name.EndsWith("_id", StringComparison.OrdinalIgnoreCase) ||
+                c.Name.EndsWith("_ID", StringComparison.OrdinalIgnoreCase));
+            
+            if (idColumn != null)
+            {
+                orderByClause = $"{QuoteIdentifier(idColumn.Name)} DESC";
+                Log.Debug("No primary key found - ordering by ID column (DESC): {OrderBy}", orderByClause);
+            }
+            else if (metadata.Columns.Count > 0)
+            {
+                orderByClause = $"{QuoteIdentifier(metadata.Columns[0].Name)} DESC";
+                Log.Debug("No primary key or ID column - ordering by first column (DESC): {OrderBy}", orderByClause);
+            }
+            else
+            {
+                orderByClause = "1";
+                Log.Warning("No columns available for ordering table: {Table}", tableReference);
+            }
         }
 
         string columnList;

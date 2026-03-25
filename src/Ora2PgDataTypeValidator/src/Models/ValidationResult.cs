@@ -5,6 +5,10 @@ public class ValidationResult
     public DateTime ValidationTime { get; init; } = DateTime.Now;
     public required string OracleSchema { get; init; }
     public required string PostgresSchema { get; init; }
+    
+    public string OracleDatabase { get; set; } = string.Empty;
+    public string PostgresDatabase { get; set; } = string.Empty;
+    
     public List<ValidationIssue> Issues { get; init; } = new();
     public int TotalColumnsValidated { get; set; }
     public int CriticalIssues => Issues.Count(i => i.Severity == ValidationSeverity.Critical);

@@ -35,12 +35,21 @@ public class ValidationReportHtmlWriter : BaseHtmlReportWriter
         
         sb.Append(GenerateHtmlHeader("Row Count Validation Report", additionalCss));
 
-        var metadata = new Dictionary<string, string>
+        var metadata = new Dictionary<string, string>();
+        
+        if (!string.IsNullOrEmpty(result.OracleDatabase))
         {
-            { "Oracle Schema", oracleSchema },
-            { "PostgreSQL Schema", postgresSchema },
-            { "Validation Time", result.ValidationTime.ToString("yyyy-MM-dd HH:mm:ss") }
-        };
+            metadata.Add("Oracle Database", result.OracleDatabase);
+        }
+        if (!string.IsNullOrEmpty(result.PostgresDatabase))
+        {
+            metadata.Add("PostgreSQL Database", result.PostgresDatabase);
+        }
+        
+        metadata.Add("Oracle Schema", oracleSchema);
+        metadata.Add("PostgreSQL Schema", postgresSchema);
+        metadata.Add("Validation Time", result.ValidationTime.ToString("yyyy-MM-dd HH:mm:ss"));
+        
         sb.Append(GenerateMetadataSection(metadata));
 
         sb.Append(GenerateStatusBadge(result.OverallStatus));
@@ -49,12 +58,24 @@ public class ValidationReportHtmlWriter : BaseHtmlReportWriter
         {
             new("Total Tables Validated", result.TotalTablesValidated.ToString(), null, null),
             new("Matching Row Counts", result.TablesWithMatchingCounts.ToString(), "✅", "match"),
-            new("Mismatched Row Counts", result.TablesWithMismatchedCounts.ToString(), "❌", "mismatch"),
-            new("Tables Only in Oracle", result.TablesOnlyInOracle.ToString(), "⚠️", "warning"),
-            new("Tables Only in PostgreSQL", result.TablesOnlyInPostgres.ToString(), "⚠️", "warning"),
-            new("Critical Issues", result.CriticalIssues.ToString(), "🔴", "mismatch"),
-            new("Errors", result.Errors.ToString(), "🔴", "mismatch"),
-            new("Warnings", result.Warnings.ToString(), "🟡", "warning")
+            new("Mismatched Row Counts", result.TablesWithMismatchedCounts.ToString(), 
+                result.TablesWithMismatchedCounts == 0 ? "✅" : "❌", 
+                result.TablesWithMismatchedCounts == 0 ? "match" : "mismatch"),
+            new("Tables Only in Oracle", result.TablesOnlyInOracle.ToString(), 
+                result.TablesOnlyInOracle == 0 ? "✅" : "⚠️", 
+                result.TablesOnlyInOracle == 0 ? "match" : "warning"),
+            new("Tables Only in PostgreSQL", result.TablesOnlyInPostgres.ToString(), 
+                result.TablesOnlyInPostgres == 0 ? "✅" : "⚠️", 
+                result.TablesOnlyInPostgres == 0 ? "match" : "warning"),
+            new("Critical Issues (>10% difference)", result.CriticalIssues.ToString(), 
+                result.CriticalIssues == 0 ? "✅" : "🔴", 
+                result.CriticalIssues == 0 ? "match" : "mismatch"),
+            new("Errors (1-10% difference)", result.Errors.ToString(), 
+                result.Errors == 0 ? "✅" : "🔴", 
+                result.Errors == 0 ? "match" : "mismatch"),
+            new("Warnings (<1% difference)", result.Warnings.ToString(), 
+                result.Warnings == 0 ? "✅" : "🟡", 
+                result.Warnings == 0 ? "match" : "warning")
         };
         sb.Append(GenerateSummaryTable(summaryMetrics));
 

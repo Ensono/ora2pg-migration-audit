@@ -32,6 +32,12 @@ public class PerformanceTestSummary
 {
     public DateTime TestStartTime { get; set; }
     public DateTime TestEndTime { get; set; }
+    
+    public string OracleDatabase { get; set; } = string.Empty;
+    public string PostgresDatabase { get; set; } = string.Empty;
+    public string OracleSchema { get; set; } = string.Empty;
+    public string PostgresSchema { get; set; } = string.Empty;
+    
     public int TotalQueries { get; set; }
     public int PassedQueries { get; set; }
     public int WarningQueries { get; set; }

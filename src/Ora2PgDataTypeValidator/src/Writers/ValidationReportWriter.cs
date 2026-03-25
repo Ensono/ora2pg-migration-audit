@@ -25,6 +25,16 @@ public class ValidationReportWriter
         sb.AppendLine("🆕 **DMS-Pattern Validation** - Validates against actual GCP Database Migration Service conversion patterns");
         sb.AppendLine();
         sb.AppendLine($"**Generated:** {result.ValidationTime:yyyy-MM-dd HH:mm:ss}");
+        
+        if (!string.IsNullOrEmpty(result.OracleDatabase))
+        {
+            sb.AppendLine($"**Oracle Database:** {result.OracleDatabase}");
+        }
+        if (!string.IsNullOrEmpty(result.PostgresDatabase))
+        {
+            sb.AppendLine($"**PostgreSQL Database:** {result.PostgresDatabase}");
+        }
+        
         sb.AppendLine($"**Oracle Schema:** {result.OracleSchema}");
         sb.AppendLine($"**PostgreSQL Schema:** {result.PostgresSchema}");
         sb.AppendLine();
@@ -65,6 +75,16 @@ public class ValidationReportWriter
         sb.AppendLine("===============================================================================");
         sb.AppendLine();
         sb.AppendLine($"Generated:          {result.ValidationTime:yyyy-MM-dd HH:mm:ss}");
+        
+        if (!string.IsNullOrEmpty(result.OracleDatabase))
+        {
+            sb.AppendLine($"Oracle Database:    {result.OracleDatabase}");
+        }
+        if (!string.IsNullOrEmpty(result.PostgresDatabase))
+        {
+            sb.AppendLine($"PostgreSQL Database:{result.PostgresDatabase}");
+        }
+        
         sb.AppendLine($"Oracle Schema:      {result.OracleSchema}");
         sb.AppendLine($"PostgreSQL Schema:  {result.PostgresSchema}");
         sb.AppendLine();

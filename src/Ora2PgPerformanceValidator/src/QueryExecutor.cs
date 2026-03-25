@@ -57,6 +57,10 @@ public class QueryExecutor
             StringComparer.OrdinalIgnoreCase
         );
         
+        // Always skip DMS-added rowid columns in PostgreSQL (added by DMS for tables without PK)
+        _postgresSkipColumns.Add("rowid");
+        _logger.Information("Auto-skipping DMS 'rowid' column in PostgreSQL performance queries");
+        
         if (_oracleSkipColumns.Any())
         {
             _logger.Information("Oracle columns to skip: {Columns}", string.Join(", ", _oracleSkipColumns));
@@ -433,24 +437,33 @@ public class QueryExecutor
             return;
         }
 
-        var maxTime = Math.Max(result.OracleExecutionTimeMs, result.PostgresExecutionTimeMs);
-        var minTime = Math.Min(result.OracleExecutionTimeMs, result.PostgresExecutionTimeMs);
-        
-        if (maxTime > 0)
+        if (result.OracleExecutionTimeMs > 0)
         {
-            result.PerformanceDifferencePercent = ((maxTime - minTime) / maxTime) * 100;
+            result.PerformanceDifferencePercent = 
+                ((result.PostgresExecutionTimeMs - result.OracleExecutionTimeMs) / result.OracleExecutionTimeMs) * 100;
         }
 
-        if (result.PerformanceDifferencePercent < _thresholdPercent)
+        if (result.PerformanceDifferencePercent <= 0)
         {
             result.Status = PerformanceStatus.Passed;
-            result.Notes = "Performance within acceptable range";
+            if (result.PerformanceDifferencePercent < 0)
+            {
+                result.Notes = $"PostgreSQL is {Math.Abs(result.PerformanceDifferencePercent):F1}% faster than Oracle ✓";
+            }
+            else
+            {
+                result.Notes = "Performance matches Oracle";
+            }
+        }
+        else if (result.PerformanceDifferencePercent < _thresholdPercent)
+        {
+            result.Status = PerformanceStatus.Passed;
+            result.Notes = $"PostgreSQL is {result.PerformanceDifferencePercent:F1}% slower (within acceptable range)";
         }
         else
         {
             result.Status = PerformanceStatus.Warning;
-            var slower = result.OracleExecutionTimeMs > result.PostgresExecutionTimeMs ? "Oracle" : "PostgreSQL";
-            result.Notes = $"Significant performance difference: {slower} is {result.PerformanceDifferencePercent:F1}% slower";
+            result.Notes = $"PostgreSQL is {result.PerformanceDifferencePercent:F1}% slower than Oracle";
         }
     }
 

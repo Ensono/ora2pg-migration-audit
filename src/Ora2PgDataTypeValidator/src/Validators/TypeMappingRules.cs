@@ -142,18 +142,29 @@ public static class TypeMappingRules
             return false;
         }
 
+        // Skip precision/scale checks when integer types are represented as DECIMAL/NUMERIC
+        // DMS sometimes maps NUMBER(38,0) to DECIMAL(38,0) instead of BIGINT
+        var expectedBase = NormalizePostgresType(expected.ExpectedType).Split('(')[0].Trim();
+        var actualBase = normalizedActual.Split('(')[0].Trim();
+        var isIntegerAsDecimal = (expectedBase == "bigint" || expectedBase == "integer" || expectedBase == "smallint") 
+                                  && (actualBase == "numeric" || actualBase == "decimal");
+        
         if (expected.ExpectedPrecision.HasValue || expected.ExpectedScale.HasValue)
         {
-            if (expected.ExpectedPrecision != postgresColumn.DataPrecision)
+            // Skip precision checks if integer type is represented as decimal
+            if (!isIntegerAsDecimal)
             {
-                mismatchReason = $"Precision mismatch: expected {expected.ExpectedPrecision}, got {postgresColumn.DataPrecision}";
-                return false;
-            }
-            
-            if (expected.ExpectedScale.HasValue && expected.ExpectedScale != postgresColumn.DataScale)
-            {
-                mismatchReason = $"Scale mismatch: expected {expected.ExpectedScale}, got {postgresColumn.DataScale}";
-                return false;
+                if (expected.ExpectedPrecision != postgresColumn.DataPrecision)
+                {
+                    mismatchReason = $"Precision mismatch: expected {expected.ExpectedPrecision}, got {postgresColumn.DataPrecision}";
+                    return false;
+                }
+                
+                if (expected.ExpectedScale.HasValue && expected.ExpectedScale != postgresColumn.DataScale)
+                {
+                    mismatchReason = $"Scale mismatch: expected {expected.ExpectedScale}, got {postgresColumn.DataScale}";
+                    return false;
+                }
             }
         }
 
@@ -205,13 +216,31 @@ public static class TypeMappingRules
         
         if (expectedBase == actualBase) return true;
         
-        if (expectedBase == "character varying" && actualBase.StartsWith("character varying"))
+        if (expectedBase == "character varying" && (actualBase.StartsWith("character varying") || actualBase == "varchar"))
             return true;
         
-        if (expectedBase == "character" && actualBase.StartsWith("character") && !actualBase.Contains("varying"))
+        if (expectedBase == "varchar" && (actualBase == "character varying" || actualBase.StartsWith("varchar")))
+            return true;
+        
+        if (expectedBase == "character" && (actualBase.StartsWith("character") && !actualBase.Contains("varying") || actualBase == "char"))
+            return true;
+        
+        if (expectedBase == "char" && (actualBase == "character" || actualBase.StartsWith("char")))
             return true;
         
         if (expectedBase == "numeric" && (actualBase.StartsWith("numeric") || actualBase.StartsWith("decimal")))
+            return true;
+        
+        if (expectedBase == "decimal" && (actualBase.StartsWith("decimal") || actualBase.StartsWith("numeric")))
+            return true;
+        
+        if (expectedBase == "bigint" && (actualBase == "numeric" || actualBase == "decimal"))
+            return true;
+        
+        if (expectedBase == "integer" && (actualBase == "numeric" || actualBase == "decimal"))
+            return true;
+        
+        if (expectedBase == "smallint" && (actualBase == "numeric" || actualBase == "decimal"))
             return true;
         
         // TIMESTAMP compatibility - DMS uses just "timestamp", not "timestamp without time zone"
@@ -222,6 +251,9 @@ public static class TypeMappingRules
             return true;
         
         if (expectedBase == "timestamp with time zone" && (actualBase == "timestamptz" || actualBase.StartsWith("timestamp with")))
+            return true;
+        
+        if (expectedBase == "bytea" && actualBase == "bytea")
             return true;
 
         return false;

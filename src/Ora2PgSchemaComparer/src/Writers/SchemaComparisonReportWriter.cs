@@ -12,6 +12,16 @@ public class SchemaComparisonReportWriter
         report.AppendLine("================================================================================");
         report.AppendLine("ORACLE TO POSTGRESQL SCHEMA COMPARISON");
         report.AppendLine("================================================================================");
+        
+        if (!string.IsNullOrEmpty(result.OracleDatabase))
+        {
+            report.AppendLine($"Oracle Database:      {result.OracleDatabase}");
+        }
+        if (!string.IsNullOrEmpty(result.PostgresDatabase))
+        {
+            report.AppendLine($"PostgreSQL Database:  {result.PostgresDatabase}");
+        }
+        
         report.AppendLine($"Source (Oracle):      {result.OracleSchema.SchemaName} schema");
         report.AppendLine($"Target (PostgreSQL):  {result.PostgresSchema.SchemaName} schema");
         report.AppendLine($"Comparison Date:      {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
@@ -39,7 +49,12 @@ public class SchemaComparisonReportWriter
         report.AppendLine("   " + GetCheckmark(result.OracleLogicalColumnCount == result.PostgresLogicalColumnCount) +
             $" Column Count:");
         report.AppendLine($"     Oracle (Logical):     {result.OracleLogicalColumnCount} columns");
-        report.AppendLine($"     PostgreSQL (Logical): {result.PostgresLogicalColumnCount} columns");
+        report.AppendLine($"     PostgreSQL (Logical): {result.PostgresLogicalColumnCount} columns (excluding DMS rowid)");
+        
+        if (result.DmsRowidColumnCount > 0)
+        {
+            report.AppendLine($"     DMS Rowid Columns:   {result.DmsRowidColumnCount} (expected - added by DMS)");
+        }
         report.AppendLine();
         
         if (result.TableIssues.Any())
@@ -207,6 +222,7 @@ public class SchemaComparisonReportWriter
         report.AppendLine("================================================================================");
         report.AppendLine($"Total Issues Found:    {result.TotalIssues}");
         report.AppendLine($"Critical Issues:       {(result.HasCriticalIssues ? "YES ❌" : "NO ✓")}");
+        report.AppendLine($"DMS Artifacts:         {result.TotalDmsArtifacts} (expected, not counted as issues)");
         report.AppendLine($"Migration Quality:     {result.OverallGrade}");
         report.AppendLine();
         
@@ -221,6 +237,34 @@ public class SchemaComparisonReportWriter
         else
         {
             report.AppendLine("❌ Critical issues found - review and resolve before proceeding.");
+        }
+        
+        // DMS Artifacts Section
+        if (result.DmsArtifacts.Any())
+        {
+            report.AppendLine();
+            report.AppendLine("================================================================================");
+            report.AppendLine("DMS ARTIFACTS (EXPECTED)");
+            report.AppendLine("================================================================================");
+            report.AppendLine();
+            report.AppendLine("The following objects were added by DMS:");
+            report.AppendLine();
+            
+            foreach (var artifact in result.DmsArtifacts)
+            {
+                var cleanArtifact = artifact.Replace("ℹ️ [DMS Expected] ", "");
+                report.AppendLine($"  ℹ️ {cleanArtifact}");
+            }
+            
+            report.AppendLine();
+            report.AppendLine($"Summary: {result.TotalDmsArtifacts} DMS artifacts");
+            report.AppendLine($"  • Synthetic PKs:    {result.SyntheticPrimaryKeyCount}");
+            report.AppendLine($"  • Rowid Columns:    {result.DmsRowidColumnCount}");
+            report.AppendLine($"  • Rowid Sequences:  {result.DmsRowidSequenceCount}");
+            report.AppendLine($"  • Rowid Indexes:    {result.DmsRowidIndexCount}");
+            report.AppendLine();
+            report.AppendLine("NOTE: These artifacts are created by DMS for tables without primary keys");
+            report.AppendLine("      and do not indicate migration issues.");
         }
         
         bool hasZeroCounts = result.OracleSchema.SequenceCount == 0 || result.OracleSchema.TriggerCount == 0 ||

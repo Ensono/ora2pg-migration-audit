@@ -162,6 +162,63 @@ IGNORED_OBJECTS=foreignkey=FK_USER_ROLE,fk=FK_DEPT_MGR
 IGNORED_OBJECTS=table=AUDIT_LOG;procedure=SP_OLD;foreignkey=FK_LEGACY,FK_DEPRECATED
 ```
 
+### Multi-Schema Validation (All Validators)
+
+All validators support validating **multiple Oracle schemas** in a single run. This is useful when your migration includes several schemas that need to be validated together.
+
+**Configuration:**
+
+Specify multiple schemas as comma-separated values:
+
+```dotenv
+# Single schema mode
+ORACLE_SCHEMA=MYSCHEMA
+POSTGRES_SCHEMA=myschema
+
+# Multi-schema mode (comma-separated, matching order)
+ORACLE_SCHEMA=OSBINVS,OSBBATCH,OSBUSG,OSBMETER
+POSTGRES_SCHEMA=osbinvs,osbbatch,osbusg,osbmeter
+
+# Auto-discover all tables in each schema
+TABLES_TO_COMPARE=ALL
+```
+
+**Requirements:**
+- Oracle and PostgreSQL schema lists must have the **same number of entries**
+- Schemas are paired by position (first Oracle schema → first PostgreSQL schema, etc.)
+- Schema names are case-insensitive
+
+**Report Output:**
+
+Each schema generates its own set of reports with the schema name as a prefix:
+
+```
+reports/
+├── osbinvs-schema-comparison-20260324-120000.md
+├── osbinvs-datatype-validation-20260324-120000.md
+├── osbinvs-rowcount-validation-20260324-120000.md
+├── osbinvs-performance-validation-20260324-120000.md
+├── osbinvs-data-fingerprint-validation-20260324-120000.md
+├── osbbatch-schema-comparison-20260324-120000.md
+├── osbbatch-datatype-validation-20260324-120000.md
+...
+```
+
+**Summary Reports:**
+
+When running in multi-schema mode, validators also generate **summary reports** that aggregate results across all schemas:
+
+```
+reports/
+├── mydb-summary-schema-comparison-20260324-120000.md
+├── mydb-summary-datatype-validation-20260324-120000.md
+├── mydb-summary-rowcount-validation-20260324-120000.md
+├── mydb-summary-performance-validation-20260324-120000.md
+├── mydb-summary-data-fingerprint-validation-20260324-120000.md
+```
+
+The database name prefix (e.g., `mydb`) comes from the `POSTGRES_DB` environment variable.
+
 ### 2. Build and Run
 
 **From Solution Root:**

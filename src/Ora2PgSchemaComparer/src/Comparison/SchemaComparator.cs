@@ -41,11 +41,13 @@ public class SchemaComparator
         result.OracleLogicalTableCount = oracleTables.Count;
         result.OracleLogicalColumnCount = result.OracleSchema.ColumnCount;
         result.PostgresLogicalTableCount = postgresSummary.LogicalTableCount;
-        result.PostgresLogicalColumnCount = postgresSummary.LogicalColumnCount;
         result.PostgresPhysicalTableCount = postgresSummary.PhysicalTableCount;
         result.PostgresPartitionedTableCount = postgresSummary.PartitionedTableCount;
         result.PostgresPartitionCount = postgresSummary.PartitionCount;
         result.PartitionDetails = postgresSummary.PartitionDetails;
+        
+        // Track total rowid columns for adjusting the logical column count
+        int totalRowidColumns = 0;
 
         if (oracleTables.Count != postgresTables.Count)
         {
@@ -63,22 +65,35 @@ public class SchemaComparator
             
             var postgresTable = postgresTables[tableName];
 
-            if (oracleTable.Columns.Count != postgresTable.Columns.Count)
-            {
-                result.TableIssues.Add($"⚠️ Column count mismatch in {tableName}: Oracle={oracleTable.Columns.Count}, PostgreSQL={postgresTable.Columns.Count}");
-            }
-
             var oracleColumns = oracleTable.Columns.OrderBy(c => c.ColumnPosition).Select(c => c.ColumnName.ToUpper()).ToList();
             var postgresColumns = postgresTable.Columns.OrderBy(c => c.ColumnPosition).Select(c => c.ColumnName.ToUpper()).ToList();
             
-            for (int i = 0; i < Math.Min(oracleColumns.Count, postgresColumns.Count); i++)
+            var rowidColumns = postgresColumns.Where(c => c.Equals("ROWID", StringComparison.OrdinalIgnoreCase)).ToList();
+            var postgresColumnsExcludingRowid = postgresColumns.Where(c => !c.Equals("ROWID", StringComparison.OrdinalIgnoreCase)).ToList();
+            
+            if (rowidColumns.Any())
             {
-                if (oracleColumns[i] != postgresColumns[i])
+                totalRowidColumns += rowidColumns.Count;
+                result.DmsRowidColumnCount += rowidColumns.Count;
+                result.DmsArtifacts.Add($"ℹ️ [DMS Expected] Table '{tableName}' has 'rowid' column (added by DMS for tables without PK)");
+            }
+            
+            if (oracleColumns.Count != postgresColumnsExcludingRowid.Count)
+            {
+                result.TableIssues.Add($"⚠️ Column count mismatch in {tableName}: Oracle={oracleColumns.Count}, PostgreSQL={postgresColumnsExcludingRowid.Count} (excluding DMS rowid)");
+            }
+            
+            for (int i = 0; i < Math.Min(oracleColumns.Count, postgresColumnsExcludingRowid.Count); i++)
+            {
+                if (oracleColumns[i] != postgresColumnsExcludingRowid[i])
                 {
-                    result.TableIssues.Add($"⚠️ Column order mismatch in {tableName} at position {i+1}: Oracle={oracleColumns[i]}, PostgreSQL={postgresColumns[i]}");
+                    result.TableIssues.Add($"⚠️ Column order mismatch in {tableName} at position {i+1}: Oracle={oracleColumns[i]}, PostgreSQL={postgresColumnsExcludingRowid[i]}");
                 }
             }
         }
+        
+        // Set the PostgreSQL logical column count excluding DMS rowid columns
+        result.PostgresLogicalColumnCount = postgresSummary.LogicalColumnCount - totalRowidColumns;
 
         foreach (var postgresTable in postgresTables.Values)
         {
@@ -109,7 +124,7 @@ public class SchemaComparator
         
         foreach (var syntheticPK in syntheticPKs)
         {
-            result.ConstraintIssues.Add($"\u26A0\uFE0F Table '{syntheticPK.TableName}' has synthetic primary key 'rowid' (added by DMS)");
+            result.DmsArtifacts.Add($"ℹ️ [DMS Expected] Table '{syntheticPK.TableName}' has synthetic primary key 'rowid' (added by DMS for tables without PK)");
         }
 
         var postgresPKsExcludingSynthetic = postgresPKs.Except(syntheticPKs).ToList();
@@ -228,12 +243,29 @@ public class SchemaComparator
             .Where(i => logicalTableSet.Contains(i.TableName.ToUpperInvariant()))
             .ToList();
 
-        result.OracleLogicalIndexCount = oracleIndexes.Count;
-        result.PostgresLogicalIndexCount = postgresIndexes.Count;
+        var rowidIndexes = postgresIndexes
+            .Where(i => i.IndexName.ToLowerInvariant().Contains("rowid") ||
+                       (i.Columns != null && i.Columns.Any(c => c.ColumnName.Equals("rowid", StringComparison.OrdinalIgnoreCase))))
+            .ToList();
         
-        if (oracleIndexes.Count != postgresIndexes.Count)
+        if (rowidIndexes.Any())
         {
-            result.IndexIssues.Add($"Index count mismatch: Oracle={oracleIndexes.Count}, PostgreSQL={postgresIndexes.Count}");
+            result.DmsRowidIndexCount = rowidIndexes.Count;
+            foreach (var idx in rowidIndexes)
+            {
+                result.DmsArtifacts.Add($"ℹ️ [DMS Expected] Index '{idx.IndexName}' on table '{idx.TableName}' (rowid index added by DMS)");
+            }
+        }
+        
+        var postgresIndexesExcludingRowid = postgresIndexes.Except(rowidIndexes).ToList();
+        
+        result.OracleLogicalIndexCount = oracleIndexes.Count;
+        result.PostgresLogicalIndexCount = postgresIndexesExcludingRowid.Count;
+        
+        if (oracleIndexes.Count != postgresIndexesExcludingRowid.Count)
+        {
+            var rowidNote = rowidIndexes.Any() ? $" (excluding {rowidIndexes.Count} DMS rowid indexes)" : "";
+            result.IndexIssues.Add($"Index count mismatch: Oracle={oracleIndexes.Count}, PostgreSQL={postgresIndexesExcludingRowid.Count}{rowidNote}");
         }
 
         var bitmapIndexes = oracleIndexes.Where(i => i.Type == IndexType.Bitmap).ToList();
@@ -246,24 +278,44 @@ public class SchemaComparator
     private void CompareCodeObjects(ComparisonResult result)
     {
         // Sequences
-        if (result.OracleSchema.SequenceCount != result.PostgresSchema.SequenceCount)
+        var oracleSeqNames = new HashSet<string>(
+            result.OracleSchema.Sequences.Select(s => s.SequenceName),
+            StringComparer.OrdinalIgnoreCase);
+        var postgresSeqNames = new HashSet<string>(
+            result.PostgresSchema.Sequences.Select(s => s.SequenceName),
+            StringComparer.OrdinalIgnoreCase);
+        
+        var rowidSequences = result.PostgresSchema.Sequences
+            .Where(s => s.SequenceName.ToLowerInvariant().Contains("rowid"))
+            .ToList();
+        
+        if (rowidSequences.Any())
+        {
+            result.DmsRowidSequenceCount = rowidSequences.Count;
+            foreach (var seq in rowidSequences)
+            {
+                result.DmsArtifacts.Add($"ℹ️ [DMS Expected] Sequence '{seq.SequenceName}' (rowid sequence added by DMS)");
+            }
+        }
+        
+        var postgresSeqNamesExcludingRowid = result.PostgresSchema.Sequences
+            .Where(s => !s.SequenceName.ToLowerInvariant().Contains("rowid"))
+            .Select(s => s.SequenceName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        
+        var effectivePostgresSeqCount = result.PostgresSchema.SequenceCount - rowidSequences.Count;
+        
+        if (result.OracleSchema.SequenceCount != effectivePostgresSeqCount)
         {
             const int maxItemsToShow = 5;
             
-            var oracleSeqNames = new HashSet<string>(
-                result.OracleSchema.Sequences.Select(s => s.SequenceName),
-                StringComparer.OrdinalIgnoreCase);
-            var postgresSeqNames = new HashSet<string>(
-                result.PostgresSchema.Sequences.Select(s => s.SequenceName),
-                StringComparer.OrdinalIgnoreCase);
-            
             var missingSeqs = result.OracleSchema.Sequences
-                .Where(s => !postgresSeqNames.Contains(s.SequenceName))
+                .Where(s => !postgresSeqNamesExcludingRowid.Contains(s.SequenceName))
                 .Select(s => s.SequenceName)
                 .ToList();
             
             var extraSeqs = result.PostgresSchema.Sequences
-                .Where(s => !oracleSeqNames.Contains(s.SequenceName))
+                .Where(s => !oracleSeqNames.Contains(s.SequenceName) && !s.SequenceName.ToLowerInvariant().Contains("rowid"))
                 .Select(s => s.SequenceName)
                 .ToList();
             
@@ -287,7 +339,8 @@ public class SchemaComparator
             }
             
             var details = detailParts.Any() ? $" | {string.Join(" | ", detailParts)}" : "";
-            result.CodeObjectIssues.Add($"ℹ Sequence count mismatch: Oracle={result.OracleSchema.SequenceCount}, PostgreSQL={result.PostgresSchema.SequenceCount}{details}");
+            var rowidNote = rowidSequences.Any() ? $" (excluding {rowidSequences.Count} DMS rowid sequences)" : "";
+            result.CodeObjectIssues.Add($"ℹ Sequence count mismatch: Oracle={result.OracleSchema.SequenceCount}, PostgreSQL={effectivePostgresSeqCount}{rowidNote}{details}");
         }
 
         if (result.OracleSchema.ViewCount != result.PostgresSchema.ViewCount)
@@ -399,6 +452,9 @@ public class ComparisonResult
 {
     public SchemaDefinition OracleSchema { get; set; } = new();
     public SchemaDefinition PostgresSchema { get; set; } = new();
+    
+    public string OracleDatabase { get; set; } = string.Empty;
+    public string PostgresDatabase { get; set; } = string.Empty;
 
     public int OracleLogicalTableCount { get; set; }
     public int PostgresLogicalTableCount { get; set; }
@@ -420,6 +476,12 @@ public class ComparisonResult
     public int PostgresPartitionCount { get; set; }
     public List<string> PartitionDetails { get; set; } = new();
     
+    public int DmsRowidColumnCount { get; set; }
+    public int DmsRowidSequenceCount { get; set; }
+    public int DmsRowidIndexCount { get; set; }
+    public List<string> DmsArtifacts { get; set; } = new();
+    public int TotalDmsArtifacts => DmsRowidColumnCount + DmsRowidSequenceCount + DmsRowidIndexCount + SyntheticPrimaryKeyCount;
+    
     public List<string> TableIssues { get; set; } = new();
     public List<string> ConstraintIssues { get; set; } = new();
     public List<string> IndexIssues { get; set; } = new();
@@ -430,17 +492,26 @@ public class ComparisonResult
     
     public int TotalIssues => TableIssues.Count + ConstraintIssues.Count + IndexIssues.Count + CodeObjectIssues.Count;
     
-    public bool HasCriticalIssues => TableIssues.Any(i => i.Contains("❌")) || 
-                                     ConstraintIssues.Any(i => i.Contains("❌"));
+    public bool HasCriticalIssues => TableIssues.Any(i => i.Contains("❌") && !IsDmsArtifactIssue(i)) ||
+                                     ConstraintIssues.Any(i => i.Contains("❌") && !IsDmsArtifactIssue(i));
+    
+    private static bool IsDmsArtifactIssue(string issue)
+    {
+        var lowerIssue = issue.ToLowerInvariant();
+        return lowerIssue.Contains("rowid") || 
+               lowerIssue.Contains("dms") ||
+               lowerIssue.Contains("synthetic");
+    }
     
     public string OverallGrade
     {
         get
         {
-            if (TotalIssues == 0) return "A+";
-            if (TotalIssues <= 5 && !HasCriticalIssues) return "A";
-            if (TotalIssues <= 10) return "B+";
-            if (TotalIssues <= 20) return "B";
+            var actualIssues = TotalIssues - DmsArtifacts.Count;
+            if (actualIssues <= 0 && !HasCriticalIssues) return "A+";
+            if (actualIssues <= 5 && !HasCriticalIssues) return "A";
+            if (actualIssues <= 10) return "B+";
+            if (actualIssues <= 20) return "B";
             return "C";
         }
     }

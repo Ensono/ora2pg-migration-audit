@@ -4,6 +4,10 @@ public class ValidationResult
 {
     public required string OracleSchema { get; set; }
     public required string PostgresSchema { get; set; }
+    
+    public string OracleDatabase { get; set; } = string.Empty;
+    public string PostgresDatabase { get; set; } = string.Empty;
+    
     public DateTime ValidationTime { get; set; } = DateTime.Now;
     public List<RowCountIssue> Issues { get; set; } = new();
     public int TotalTablesValidated { get; set; }

@@ -17,6 +17,8 @@ public class ComparisonDatabaseProcessor
     private readonly string _hashAlgorithm;
     private readonly int _batchSize;
     private readonly int _fetchSize;
+    private readonly string _oracleDatabase;
+    private readonly string _postgresDatabase;
 
     public ComparisonDatabaseProcessor(DatabaseConnectionManager connectionManager)
     {
@@ -28,10 +30,12 @@ public class ComparisonDatabaseProcessor
         _hashAlgorithm = props.Get("HASH_ALGORITHM", props.Get("hash.algorithm", "SHA256"));
         _batchSize = props.GetInt("BATCH_SIZE", props.GetInt("batch.size", 5000));
         _fetchSize = props.GetInt("FETCH_SIZE", props.GetInt("fetch.size", 1000));
+        _oracleDatabase = props.Get("ORACLE_SERVICE", "");
+        _postgresDatabase = props.Get("POSTGRES_DB", "");
     }
 
 
-    public void ProcessAndCompareTables(Dictionary<string, string> tableMapping)
+    public (List<ComparisonResult> Results, int SuccessCount, int FailCount) ProcessAndCompareTables(Dictionary<string, string> tableMapping, string schemaName = "")
     {
         Log.Information("");
         Log.Information(new string('=', 80));
@@ -43,7 +47,7 @@ public class ComparisonDatabaseProcessor
             Log.Error("✗ No tables specified for comparison");
             Log.Error("  Set TABLES_TO_COMPARE in .env file");
             Log.Error("  Format: ORACLE_SCHEMA.TABLE=postgres_schema.table");
-            return;
+            return (new List<ComparisonResult>(), 0, 0);
         }
 
         Log.Information("Tables to compare: {Count}", tableMapping.Count);
@@ -106,21 +110,43 @@ public class ComparisonDatabaseProcessor
 
         try
         {
-            var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             var props = ApplicationProperties.Instance;
             var reportsDir = props.GetReportsDirectory("Ora2PgDataValidator");
 
+            var dbName = _postgresDatabase.ToLower();
+            var dbPrefix = string.IsNullOrEmpty(dbName) ? "" : $"{dbName}-";
+            
+            var schemaPrefix = "";
+            if (!string.IsNullOrWhiteSpace(schemaName))
+            {
+                schemaPrefix = $"{dbPrefix}{schemaName.ToLower()}-";
+            }
+            else if (tableMapping.Any())
+            {
+                var firstOracleTable = tableMapping.First().Key;
+                if (firstOracleTable.Contains('.'))
+                {
+                    var schema = firstOracleTable.Split('.')[0].ToLower();
+                    schemaPrefix = $"{dbPrefix}{schema}-";
+                }
+            }
+            else
+            {
+                schemaPrefix = dbPrefix;
+            }
+
             var markdownWriter = new DataValidationMarkdownWriter();
-            var markdownReportPath = Path.Combine(reportsDir, $"data_fingerprint_validation_{timestamp}.md");
-            markdownWriter.WriteMarkdownReport(allResults, markdownReportPath);
+            var markdownReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.md");
+            markdownWriter.WriteMarkdownReport(allResults, markdownReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Markdown report saved to: {ReportPath}", markdownReportPath);
 
-            string textReportPath = _reportWriter.GenerateDetailedReport(allResults);
+            string textReportPath = _reportWriter.GenerateDetailedReport(allResults, schemaPrefix, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Text report saved to: {ReportPath}", textReportPath);
 
             var htmlWriter = new DataValidationHtmlWriter();
-            var htmlReportPath = Path.Combine(reportsDir, $"data_fingerprint_validation_{timestamp}.html");
-            htmlWriter.WriteHtmlReport(allResults, htmlReportPath);
+            var htmlReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.html");
+            htmlWriter.WriteHtmlReport(allResults, htmlReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 HTML report saved to: {ReportPath}", htmlReportPath);
         }
         catch (Exception ex)
@@ -132,10 +158,12 @@ public class ComparisonDatabaseProcessor
         Log.Information(new string('=', 80));
         Log.Information("CSV hash files are available in the reports/ folder for manual review");
         Log.Information(new string('=', 80));
+        
+        return (allResults, successCount, failCount);
     }
 
 
-    public void ProcessAndCompareObjects(Dictionary<string, (string targetObject, DatabaseObjectType objectType)> objectMapping)
+    public void ProcessAndCompareObjects(Dictionary<string, (string targetObject, DatabaseObjectType objectType)> objectMapping, string schemaName = "")
     {
         Log.Information("");
         Log.Information(new string('=', 80));
@@ -215,21 +243,43 @@ public class ComparisonDatabaseProcessor
 
         try
         {
-            var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             var props = ApplicationProperties.Instance;
             var reportsDir = props.GetReportsDirectory("Ora2PgDataValidator");
 
+            var dbName = _postgresDatabase.ToLower();
+            var dbPrefix = string.IsNullOrEmpty(dbName) ? "" : $"{dbName}-";
+            
+            var schemaPrefix = "";
+            if (!string.IsNullOrWhiteSpace(schemaName))
+            {
+                schemaPrefix = $"{dbPrefix}{schemaName.ToLower()}-";
+            }
+            else if (objectMapping.Any())
+            {
+                var firstSourceObject = objectMapping.First().Key;
+                if (firstSourceObject.Contains('.'))
+                {
+                    var schema = firstSourceObject.Split('.')[0].ToLower();
+                    schemaPrefix = $"{dbPrefix}{schema}-";
+                }
+            }
+            else
+            {
+                schemaPrefix = dbPrefix;
+            }
+
             var markdownWriter = new DataValidationMarkdownWriter();
-            var markdownReportPath = Path.Combine(reportsDir, $"data_fingerprint_validation_{timestamp}.md");
-            markdownWriter.WriteMarkdownReport(allResults, markdownReportPath);
+            var markdownReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.md");
+            markdownWriter.WriteMarkdownReport(allResults, markdownReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Markdown report saved to: {ReportPath}", markdownReportPath);
 
-            string textReportPath = _reportWriter.GenerateDetailedReport(allResults);
+            string textReportPath = _reportWriter.GenerateDetailedReport(allResults, schemaPrefix, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Text report saved to: {ReportPath}", textReportPath);
 
             var htmlWriter = new DataValidationHtmlWriter();
-            var htmlReportPath = Path.Combine(reportsDir, $"data_fingerprint_validation_{timestamp}.html");
-            htmlWriter.WriteHtmlReport(allResults, htmlReportPath);
+            var htmlReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.html");
+            htmlWriter.WriteHtmlReport(allResults, htmlReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 HTML report saved to: {ReportPath}", htmlReportPath);
         }
         catch (Exception ex)

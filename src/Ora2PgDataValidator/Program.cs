@@ -2,6 +2,8 @@ using Serilog;
 using Ora2Pg.Common.Config;
 using Ora2Pg.Common.Connection;
 using Ora2PgDataValidator.Processor;
+using Ora2PgDataValidator.Writers;
+using Ora2PgDataValidator.Comparison;
 using Ora2Pg.Common.Util;
 using Ora2PgDataValidator.src;
 
@@ -114,21 +116,39 @@ class Program
         }
         else
         {
-            Log.Warning("No tables specified - discovering tables from database schema");
+            Log.Warning("No tables specified - discovering tables from database schema(s)");
 
-            string schemaName = targetDatabase == DatabaseType.Oracle
+            string schemasStr = targetDatabase == DatabaseType.Oracle
                 ? props.Get("ORACLE_SCHEMA", "")
                 : props.Get("POSTGRES_SCHEMA", "");
 
-            if (string.IsNullOrWhiteSpace(schemaName))
+            if (string.IsNullOrWhiteSpace(schemasStr))
             {
                 Log.Error("✗ No schema specified. Set ORACLE_SCHEMA or POSTGRES_SCHEMA in .env");
                 Environment.Exit(1);
                 return;
             }
 
-            tables = connectionManager.GetTablesInSchema(targetDatabase, schemaName);
-            Log.Information("Discovered {Count} tables in schema {Schema}", tables.Count, schemaName);
+            var schemas = schemasStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            
+            if (schemas.Length > 1)
+            {
+                Log.Information("Multi-schema mode: Discovering tables from {Count} schemas", schemas.Length);
+            }
+
+            tables = new List<string>();
+            foreach (var schema in schemas)
+            {
+                var schemaTables = connectionManager.GetTablesInSchema(targetDatabase, schema);
+                Log.Information("  Discovered {Count} tables in schema {Schema}", schemaTables.Count, schema);
+                
+                foreach (var table in schemaTables)
+                {
+                    tables.Add($"{schema}.{table}");
+                }
+            }
+            
+            Log.Information("Total: Discovered {Count} tables across all schemas", tables.Count);
         }
 
         var tableFilter = ObjectFilter.FromProperties(props);
@@ -202,10 +222,10 @@ class Program
             Log.Information("");
             Log.Information("5. Discovering all common tables between Oracle and PostgreSQL...");
             
-            string oracleSchema = props.Get("ORACLE_SCHEMA", "");
-            string postgresSchema = props.Get("POSTGRES_SCHEMA", "");
+            string oracleSchemasStr = props.Get("ORACLE_SCHEMA", "");
+            string postgresSchemasStr = props.Get("POSTGRES_SCHEMA", "");
 
-            if (string.IsNullOrWhiteSpace(oracleSchema) || string.IsNullOrWhiteSpace(postgresSchema))
+            if (string.IsNullOrWhiteSpace(oracleSchemasStr) || string.IsNullOrWhiteSpace(postgresSchemasStr))
             {
                 Log.Error("✗ Schema names required for auto-discovery");
                 Log.Error("  Set ORACLE_SCHEMA and POSTGRES_SCHEMA in .env");
@@ -213,24 +233,166 @@ class Program
                 return;
             }
 
-            var oracleTables = connectionManager.GetTablesInSchema(DatabaseType.Oracle, oracleSchema);
-            var postgresTables = connectionManager.GetTablesInSchema(DatabaseType.PostgreSQL, postgresSchema);
+            var oracleSchemas = oracleSchemasStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var postgresSchemas = postgresSchemasStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-            tableMapping = new Dictionary<string, string>();
-            foreach (var oracleTable in oracleTables)
+            Log.Information("Parsed {OracleCount} Oracle schemas:", oracleSchemas.Length);
+            for (int idx = 0; idx < oracleSchemas.Length; idx++)
             {
-                var matchingPostgresTable = postgresTables
-                    .FirstOrDefault(pt => string.Equals(pt, oracleTable, StringComparison.OrdinalIgnoreCase));
-                
-                if (matchingPostgresTable != null)
-                {
-                    string oracleRef = $"{oracleSchema}.{oracleTable}";
-                    string postgresRef = $"{postgresSchema}.{matchingPostgresTable}";
-                    tableMapping[oracleRef] = postgresRef;
-                }
+                Log.Information("  [{Index}] '{Schema}'", idx, oracleSchemas[idx]);
+            }
+            
+            Log.Information("Parsed {PostgresCount} PostgreSQL schemas:", postgresSchemas.Length);
+            for (int idx = 0; idx < postgresSchemas.Length; idx++)
+            {
+                Log.Information("  [{Index}] '{Schema}'", idx, postgresSchemas[idx]);
             }
 
-            Log.Information("Found {Count} common tables", tableMapping.Count);
+            if (oracleSchemas.Length != postgresSchemas.Length)
+            {
+                Log.Error("✗ Number of Oracle schemas ({OracleCount}) must match number of PostgreSQL schemas ({PostgresCount})", 
+                    oracleSchemas.Length, postgresSchemas.Length);
+                Log.Error("  ORACLE_SCHEMA: {OracleSchemas}", oracleSchemasStr);
+                Log.Error("  POSTGRES_SCHEMA: {PostgresSchemas}", postgresSchemasStr);
+                Log.Error("  Schemas must be provided in matching order, comma-separated");
+                Environment.Exit(1);
+                return;
+            }
+
+            if (oracleSchemas.Length > 1)
+            {
+                Log.Information("Multi-schema mode: Testing {Count} schema pairs", oracleSchemas.Length);
+            }
+
+            var tableFilter = ObjectFilter.FromProperties(props);
+
+            var schemaMappings = new List<(string OracleSchema, string PostgresSchema, Dictionary<string, string> TableMapping)>();
+            
+            for (int i = 0; i < oracleSchemas.Length; i++)
+            {
+                string oracleSchema = oracleSchemas[i];
+                string postgresSchema = postgresSchemas[i];
+
+                Log.Information("  Discovering tables in schema pair: {OracleSchema} → {PostgresSchema}", 
+                    oracleSchema, postgresSchema);
+
+                var oracleTables = connectionManager.GetTablesInSchema(DatabaseType.Oracle, oracleSchema);
+                var postgresTables = connectionManager.GetTablesInSchema(DatabaseType.PostgreSQL, postgresSchema);
+
+                var schemaTableMapping = new Dictionary<string, string>();
+                int pairCount = 0;
+                int excludedCount = 0;
+                
+                foreach (var oracleTable in oracleTables)
+                {
+                    var matchingPostgresTable = postgresTables
+                        .FirstOrDefault(pt => string.Equals(pt, oracleTable, StringComparison.OrdinalIgnoreCase));
+                    
+                    if (matchingPostgresTable != null)
+                    {
+                        string oracleRef = $"{oracleSchema}.{oracleTable}";
+                        string postgresRef = $"{postgresSchema}.{matchingPostgresTable}";
+                        
+                        if (tableFilter.IsTableExcluded(oracleRef, oracleSchema) ||
+                            tableFilter.IsTableExcluded(postgresRef, postgresSchema))
+                        {
+                            excludedCount++;
+                            continue;
+                        }
+                        
+                        schemaTableMapping[oracleRef] = postgresRef;
+                        pairCount++;
+                    }
+                }
+
+                Log.Information("    Found {Count} common tables in this schema pair", pairCount);
+                if (excludedCount > 0)
+                {
+                    Log.Information("    Excluded {Count} table(s) based on exclusion patterns", excludedCount);
+                }
+                schemaMappings.Add((oracleSchema, postgresSchema, schemaTableMapping));
+            }
+
+            Log.Information("Total: Found {Count} common tables across all schemas", 
+                schemaMappings.Sum(sm => sm.TableMapping.Count));
+
+            var processorForAll = new ComparisonDatabaseProcessor(connectionManager);
+            var allSchemaResults = new List<DataValidatorSummary>();
+            
+            Log.Information("");
+            Log.Information("About to process {Count} schema mappings:", schemaMappings.Count);
+            for (int idx = 0; idx < schemaMappings.Count; idx++)
+            {
+                Log.Information("  [{Index}] {Oracle} → {Postgres} ({Tables} tables)",
+                    idx, schemaMappings[idx].OracleSchema, schemaMappings[idx].PostgresSchema, 
+                    schemaMappings[idx].TableMapping.Count);
+            }
+            
+            foreach (var (oracleSchema, postgresSchema, schemaTableMapping) in schemaMappings)
+            {
+                Log.Information("");
+                Log.Information("═══════════════════════════════════════════════════════════");
+                Log.Information("  Processing Schema: {OracleSchema} → {PostgresSchema}", oracleSchema, postgresSchema);
+                Log.Information("  Table count: {Count}", schemaTableMapping.Count);
+                Log.Information("═══════════════════════════════════════════════════════════");
+                
+                if (schemaTableMapping.Count == 0)
+                {
+                    Log.Warning("⚠️  Schema {Schema} has no common tables - skipping validation but adding to summary", oracleSchema);
+                    allSchemaResults.Add(new DataValidatorSummary
+                    {
+                        OracleSchema = oracleSchema,
+                        PostgresSchema = postgresSchema,
+                        TotalTables = 0,
+                        SuccessfulValidations = 0,
+                        FailedValidations = 0,
+                        Results = new List<ComparisonResult>()
+                    });
+                    continue;
+                }
+                
+                var (results, successCount, failCount) = processorForAll.ProcessAndCompareTables(schemaTableMapping, oracleSchema);
+                
+                allSchemaResults.Add(new DataValidatorSummary
+                {
+                    OracleSchema = oracleSchema,
+                    PostgresSchema = postgresSchema,
+                    TotalTables = schemaTableMapping.Count,
+                    SuccessfulValidations = successCount,
+                    FailedValidations = failCount,
+                    Results = results
+                });
+                
+                Log.Information("✓ Added result for {Schema}. Total results so far: {Count}", 
+                    oracleSchema, allSchemaResults.Count);
+            }
+            
+            if (schemaMappings.Count > 1)
+            {
+                Log.Information("");
+                Log.Information("═══════════════════════════════════════════════════════════");
+                Log.Information("  Multi-Schema Validation Summary");
+                Log.Information("═══════════════════════════════════════════════════════════");
+                Log.Information("Total schema pairs validated: {Count}", schemaMappings.Count);
+                Log.Information("Total results collected for summary: {Count}", allSchemaResults.Count);
+                
+                for (int i = 0; i < allSchemaResults.Count; i++)
+                {
+                    var r = allSchemaResults[i];
+                    Log.Information("  [{Index}] {Oracle} → {Postgres} - {Tables} tables, {Success} success, {Fail} failed",
+                        i, r.OracleSchema ?? "(null)", r.PostgresSchema ?? "(null)", 
+                        r.TotalTables, r.SuccessfulValidations, r.FailedValidations);
+                }
+                
+                Log.Information("📝 Generating multi-schema summary report...");
+                var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                var reportsDir = props.GetReportsDirectory("Ora2PgDataValidator");
+                var summaryWriter = new MultiSchemaSummaryWriter();
+                summaryWriter.WriteSummaryReport(allSchemaResults, reportsDir, timestamp);
+            }
+
+            connectionManager.Dispose();
+            return;
         }
         else
         {
@@ -260,6 +422,18 @@ class Program
             }
 
             tableMapping = filteredMapping;
+            
+            var schemaGroups = tableMapping
+                .GroupBy(kvp => {
+                    var oracleSchema = kvp.Key.Contains('.') ? kvp.Key.Split('.')[0] : "";
+                    return oracleSchema;
+                })
+                .ToList();
+            
+            if (schemaGroups.Count > 1)
+            {
+                Log.Information("Detected tables from {Count} schemas - will generate per-schema reports", schemaGroups.Count);
+            }
         }
 
         string viewsConfig = props.Get("VIEWS_TO_COMPARE", "");
@@ -351,11 +525,53 @@ class Program
         
         if (allObjectMapping.Count > tableMapping.Count)
         {
-            processor.ProcessAndCompareObjects(allObjectMapping);
+            var schemaObjectGroups = allObjectMapping
+                .GroupBy(kvp => {
+                    var oracleSchema = kvp.Key.Contains('.') ? kvp.Key.Split('.')[0] : "";
+                    return oracleSchema;
+                })
+                .ToList();
+            
+            foreach (var schemaGroup in schemaObjectGroups)
+            {
+                var schemaName = schemaGroup.Key;
+                var schemaObjects = schemaGroup.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+                
+                if (schemaObjectGroups.Count > 1)
+                {
+                    Log.Information("");
+                    Log.Information("═══════════════════════════════════════════════════════════");
+                    Log.Information("  Processing Schema: {Schema}", schemaName);
+                    Log.Information("═══════════════════════════════════════════════════════════");
+                }
+                
+                processor.ProcessAndCompareObjects(schemaObjects, schemaName);
+            }
         }
         else
         {
-            processor.ProcessAndCompareTables(tableMapping);
+            var schemaTableGroups = tableMapping
+                .GroupBy(kvp => {
+                    var oracleSchema = kvp.Key.Contains('.') ? kvp.Key.Split('.')[0] : "";
+                    return oracleSchema;
+                })
+                .ToList();
+            
+            foreach (var schemaGroup in schemaTableGroups)
+            {
+                var schemaName = schemaGroup.Key;
+                var schemaTables = schemaGroup.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+                
+                if (schemaTableGroups.Count > 1)
+                {
+                    Log.Information("");
+                    Log.Information("═══════════════════════════════════════════════════════════");
+                    Log.Information("  Processing Schema: {Schema}", schemaName);
+                    Log.Information("═══════════════════════════════════════════════════════════");
+                }
+                
+                processor.ProcessAndCompareTables(schemaTables, schemaName);
+            }
         }
     }
 }

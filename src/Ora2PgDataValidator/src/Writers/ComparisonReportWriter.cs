@@ -8,6 +8,8 @@ public class ComparisonReportWriter
 {
     private readonly string _reportsDir;
     private const int ReportLineWidth = 100;
+    private string _oracleDatabase = string.Empty;
+    private string _postgresDatabase = string.Empty;
 
     public ComparisonReportWriter()
     {
@@ -15,15 +17,23 @@ public class ComparisonReportWriter
         _reportsDir = props.GetReportsDirectory("Ora2PgDataValidator");
     }
     
-    public string GenerateDetailedReport(List<ComparisonResult> results)
+    public string GenerateDetailedReport(List<ComparisonResult> results, string schemaPrefix = "")
     {
+        return GenerateDetailedReport(results, schemaPrefix, string.Empty, string.Empty);
+    }
+    
+    public string GenerateDetailedReport(List<ComparisonResult> results, string schemaPrefix, string oracleDatabase, string postgresDatabase)
+    {
+        _oracleDatabase = oracleDatabase;
+        _postgresDatabase = postgresDatabase;
+        
         if (!Directory.Exists(_reportsDir))
         {
             Directory.CreateDirectory(_reportsDir);
         }
 
-        string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-        string reportFilename = $"migration_comparison_report_{timestamp}.txt";
+        string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        string reportFilename = $"{schemaPrefix}data-fingerprint-validation-{timestamp}.txt";
         string reportPath = Path.Combine(_reportsDir, reportFilename);
 
         using var writer = new StreamWriter(reportPath);
@@ -43,6 +53,16 @@ public class ComparisonReportWriter
         writer.WriteLine(new string('=', ReportLineWidth));
         writer.WriteLine();
         writer.WriteLine($"Report Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        
+        if (!string.IsNullOrEmpty(_oracleDatabase))
+        {
+            writer.WriteLine($"Oracle Database:  {_oracleDatabase}");
+        }
+        if (!string.IsNullOrEmpty(_postgresDatabase))
+        {
+            writer.WriteLine($"PostgreSQL Database: {_postgresDatabase}");
+        }
+        
         writer.WriteLine();
     }
 
