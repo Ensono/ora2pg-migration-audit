@@ -102,6 +102,10 @@ class Program
             var allSchemaResults = new List<(string OracleSchema, string PostgresSchema, Ora2PgRowCountValidator.Models.ValidationResult Result)>();
             var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             var reportsDir = props.GetReportsDirectory("Ora2PgRowCountValidator");
+            
+            // Command timeout for COUNT queries on large tables (default: 10 minutes)
+            var commandTimeoutSeconds = props.GetInt("COMMAND_TIMEOUT_SECONDS", 600);
+            Log.Information("Using query timeout: {Timeout} seconds", commandTimeoutSeconds);
 
             for (int i = 0; i < oracleSchemas.Length; i++)
             {
@@ -117,12 +121,12 @@ class Program
                 var stopwatch = Stopwatch.StartNew();
                 
                 Log.Information($"📊 Extracting row counts from Oracle schema '{oracleSchema}'...");
-                var oracleExtractor = new OracleRowCountExtractor(oracleConnString);
+                var oracleExtractor = new OracleRowCountExtractor(oracleConnString, commandTimeoutSeconds);
                 var oracleCounts = await oracleExtractor.ExtractRowCountsAsync(oracleSchema);
                 Log.Information($"✓ Found {oracleCounts.Count} tables in Oracle (Total: {oracleCounts.Sum(t => t.RowCount):N0} rows)");
 
                 Log.Information($"📊 Extracting row counts from PostgreSQL schema '{postgresSchema}'...");
-                var postgresExtractor = new PostgresRowCountExtractor(postgresConnString);
+                var postgresExtractor = new PostgresRowCountExtractor(postgresConnString, commandTimeoutSeconds);
                 var postgresCounts = await postgresExtractor.ExtractRowCountsAsync(postgresSchema);
                 Log.Information($"✓ Found {postgresCounts.Count} tables in PostgreSQL (Total: {postgresCounts.Sum(t => t.RowCount):N0} rows)");
 

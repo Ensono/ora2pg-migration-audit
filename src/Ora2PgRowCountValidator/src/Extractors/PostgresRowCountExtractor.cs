@@ -8,10 +8,12 @@ namespace Ora2PgRowCountValidator.Extractors;
 public class PostgresRowCountExtractor
 {
     private readonly string _connectionString;
+    private readonly int _commandTimeoutSeconds;
 
-    public PostgresRowCountExtractor(string connectionString)
+    public PostgresRowCountExtractor(string connectionString, int commandTimeoutSeconds = 300)
     {
         _connectionString = connectionString;
+        _commandTimeoutSeconds = commandTimeoutSeconds;
     }
 
     public async Task<List<TableRowCount>> ExtractRowCountsAsync(string schemaName)
@@ -63,6 +65,7 @@ public class PostgresRowCountExtractor
             {
                 var countQuery = $"SELECT COUNT(*) FROM {schemaName.ToLower()}.{tableName}";
                 using var cmd = new NpgsqlCommand(countQuery, connection);
+                cmd.CommandTimeout = _commandTimeoutSeconds;
                 var count = Convert.ToInt64(await cmd.ExecuteScalarAsync());
 
                 var tableRowCount = new TableRowCount
@@ -149,6 +152,7 @@ public class PostgresRowCountExtractor
             {
                 var countQuery = $"SELECT COUNT(*) FROM {schemaName.ToLower()}.{partition}";
                 using var cmd = new NpgsqlCommand(countQuery, connection);
+                cmd.CommandTimeout = _commandTimeoutSeconds;
                 var count = Convert.ToInt64(await cmd.ExecuteScalarAsync());
 
                 partitionCounts.Add(new PartitionRowCount

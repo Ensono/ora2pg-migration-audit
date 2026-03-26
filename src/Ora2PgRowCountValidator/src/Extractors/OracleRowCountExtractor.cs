@@ -9,10 +9,12 @@ namespace Ora2PgRowCountValidator.Extractors;
 public class OracleRowCountExtractor
 {
     private readonly string _connectionString;
+    private readonly int _commandTimeoutSeconds;
 
-    public OracleRowCountExtractor(string connectionString)
+    public OracleRowCountExtractor(string connectionString, int commandTimeoutSeconds = 300)
     {
         _connectionString = connectionString;
+        _commandTimeoutSeconds = commandTimeoutSeconds;
     }
 
 
@@ -60,6 +62,7 @@ public class OracleRowCountExtractor
             {
                 var countQuery = $"SELECT COUNT(*) FROM {schemaName.ToUpper()}.{tableName}";
                 using var cmd = new OracleCommand(countQuery, connection);
+                cmd.CommandTimeout = _commandTimeoutSeconds;
                 var count = Convert.ToInt64(await cmd.ExecuteScalarAsync());
 
                 rowCounts.Add(new TableRowCount

@@ -10,6 +10,8 @@ public class ComparisonReportWriter
     private const int ReportLineWidth = 100;
     private string _oracleDatabase = string.Empty;
     private string _postgresDatabase = string.Empty;
+    private string _oracleSchema = string.Empty;
+    private string _postgresSchema = string.Empty;
 
     public ComparisonReportWriter()
     {
@@ -19,13 +21,32 @@ public class ComparisonReportWriter
     
     public string GenerateDetailedReport(List<ComparisonResult> results, string schemaPrefix = "")
     {
-        return GenerateDetailedReport(results, schemaPrefix, string.Empty, string.Empty);
+        return GenerateDetailedReport(results, schemaPrefix, string.Empty, string.Empty, string.Empty, string.Empty);
     }
     
     public string GenerateDetailedReport(List<ComparisonResult> results, string schemaPrefix, string oracleDatabase, string postgresDatabase)
     {
+        return GenerateDetailedReport(results, schemaPrefix, oracleDatabase, postgresDatabase, string.Empty, string.Empty);
+    }
+
+    public string GenerateDetailedReport(List<ComparisonResult> results, string schemaPrefix, string oracleDatabase, string postgresDatabase, string oracleSchema, string postgresSchema)
+    {
         _oracleDatabase = oracleDatabase;
         _postgresDatabase = postgresDatabase;
+        _oracleSchema = oracleSchema;
+        _postgresSchema = postgresSchema;
+        
+        // Try to extract schema from first result if not provided
+        if (string.IsNullOrEmpty(_oracleSchema) && results.Count > 0)
+        {
+            var parts = results[0].SourceTable.Split('.');
+            if (parts.Length > 1) _oracleSchema = parts[0];
+        }
+        if (string.IsNullOrEmpty(_postgresSchema) && results.Count > 0)
+        {
+            var parts = results[0].TargetTable.Split('.');
+            if (parts.Length > 1) _postgresSchema = parts[0];
+        }
         
         if (!Directory.Exists(_reportsDir))
         {
@@ -56,11 +77,19 @@ public class ComparisonReportWriter
         
         if (!string.IsNullOrEmpty(_oracleDatabase))
         {
-            writer.WriteLine($"Oracle Database:  {_oracleDatabase}");
+            writer.WriteLine($"Oracle Database:     {_oracleDatabase}");
         }
         if (!string.IsNullOrEmpty(_postgresDatabase))
         {
             writer.WriteLine($"PostgreSQL Database: {_postgresDatabase}");
+        }
+        if (!string.IsNullOrEmpty(_oracleSchema))
+        {
+            writer.WriteLine($"Oracle Schema:       {_oracleSchema}");
+        }
+        if (!string.IsNullOrEmpty(_postgresSchema))
+        {
+            writer.WriteLine($"PostgreSQL Schema:   {_postgresSchema}");
         }
         
         writer.WriteLine();
