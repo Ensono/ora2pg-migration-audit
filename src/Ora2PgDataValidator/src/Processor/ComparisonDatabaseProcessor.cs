@@ -1,4 +1,5 @@
 using System.Data;
+using System.Collections.Concurrent;
 using Serilog;
 using Ora2Pg.Common.Config;
 using Ora2Pg.Common.Connection;
@@ -19,6 +20,7 @@ public class ComparisonDatabaseProcessor
     private readonly int _fetchSize;
     private readonly string _oracleDatabase;
     private readonly string _postgresDatabase;
+    private readonly int _parallelTables;
 
     public ComparisonDatabaseProcessor(DatabaseConnectionManager connectionManager)
     {
@@ -32,6 +34,8 @@ public class ComparisonDatabaseProcessor
         _fetchSize = props.GetInt("FETCH_SIZE", props.GetInt("fetch.size", 1000));
         _oracleDatabase = props.Get("ORACLE_SERVICE", "");
         _postgresDatabase = props.Get("POSTGRES_DB", "");
+
+        _parallelTables = props.GetInt("PARALLEL_TABLES", 4);
     }
 
 
@@ -51,21 +55,26 @@ public class ComparisonDatabaseProcessor
         }
 
         Log.Information("Tables to compare: {Count}", tableMapping.Count);
+        Log.Information("Parallel processing: {Count} tables at a time", _parallelTables);
 
-        var allResults = new List<ComparisonResult>();
+        var allResults = new ConcurrentBag<ComparisonResult>();
         int successCount = 0;
         int failCount = 0;
 
-        foreach (var entry in tableMapping)
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = _parallelTables
+        };
+
+        var tableList = tableMapping.ToList();
+        
+        Parallel.ForEach(tableList, parallelOptions, entry =>
         {
             string oracleTable = entry.Key;
             string postgresTable = entry.Value;
 
-            Log.Information("");
-            Log.Information(new string('-', 80));
-            Log.Information("Comparing: {OracleTable} (Oracle) ↔ {PostgresTable} (PostgreSQL)",
-                           oracleTable, postgresTable);
-            Log.Information(new string('-', 80));
+            Log.Information("[{Thread}] Comparing: {OracleTable} ↔ {PostgresTable}",
+                           Environment.CurrentManagedThreadId, oracleTable, postgresTable);
 
             try
             {
@@ -74,31 +83,32 @@ public class ComparisonDatabaseProcessor
 
                 if (result.IsMatch)
                 {
-                    successCount++;
-                    Log.Information("✓ Tables match - migration validated successfully");
+                    Interlocked.Increment(ref successCount);
+                    Log.Information("[{Thread}] ✓ {Table} - match validated", 
+                        Environment.CurrentManagedThreadId, oracleTable);
                 }
                 else
                 {
-                    failCount++;
-                    Log.Warning("✗ Tables differ - migration validation failed");
-                    Log.Warning("  Missing in PostgreSQL: {Count} rows", result.MissingInTarget);
-                    Log.Warning("  Extra in PostgreSQL: {Count} rows", result.ExtraInTarget);
-                    Log.Warning("  Mismatched rows: {Count}", result.MismatchedRows);
+                    Interlocked.Increment(ref failCount);
+                    Log.Warning("[{Thread}] ✗ {Table} - validation failed (Missing: {Missing}, Extra: {Extra}, Mismatched: {Mismatched})",
+                        Environment.CurrentManagedThreadId, oracleTable,
+                        result.MissingInTarget, result.ExtraInTarget, result.MismatchedRows);
                 }
             }
             catch (Exception ex)
             {
-                failCount++;
-                Log.Error(ex, "✗ Failed to compare tables: {OracleTable} ↔ {PostgresTable}",
-                         oracleTable, postgresTable);
+                Interlocked.Increment(ref failCount);
+                Log.Error(ex, "[{Thread}] ✗ Failed to compare: {OracleTable} ↔ {PostgresTable}",
+                         Environment.CurrentManagedThreadId, oracleTable, postgresTable);
                 var errorResult = new ComparisonResult(oracleTable, postgresTable)
                 {
                     Error = ex.Message
                 };
                 allResults.Add(errorResult);
             }
-        }
+        });
 
+        var resultsList = allResults.ToList();
 
         Log.Information("");
         Log.Information(new string('=', 80));
@@ -138,15 +148,15 @@ public class ComparisonDatabaseProcessor
 
             var markdownWriter = new DataValidationMarkdownWriter();
             var markdownReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.md");
-            markdownWriter.WriteMarkdownReport(allResults, markdownReportPath, _oracleDatabase, _postgresDatabase);
+            markdownWriter.WriteMarkdownReport(resultsList, markdownReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Markdown report saved to: {ReportPath}", markdownReportPath);
 
-            string textReportPath = _reportWriter.GenerateDetailedReport(allResults, schemaPrefix, _oracleDatabase, _postgresDatabase);
+            string textReportPath = _reportWriter.GenerateDetailedReport(resultsList, schemaPrefix, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Text report saved to: {ReportPath}", textReportPath);
 
             var htmlWriter = new DataValidationHtmlWriter();
             var htmlReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.html");
-            htmlWriter.WriteHtmlReport(allResults, htmlReportPath, _oracleDatabase, _postgresDatabase);
+            htmlWriter.WriteHtmlReport(resultsList, htmlReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 HTML report saved to: {ReportPath}", htmlReportPath);
         }
         catch (Exception ex)
@@ -159,7 +169,7 @@ public class ComparisonDatabaseProcessor
         Log.Information("CSV hash files are available in the reports/ folder for manual review");
         Log.Information(new string('=', 80));
         
-        return (allResults, successCount, failCount);
+        return (resultsList, successCount, failCount);
     }
 
 
@@ -182,22 +192,33 @@ public class ComparisonDatabaseProcessor
         Log.Information("Objects to compare: {Total} ({Tables} tables, {Views} views)", 
             objectMapping.Count, tableCount, viewCount);
 
-        var allResults = new List<ComparisonResult>();
+        var allResults = new ConcurrentBag<ComparisonResult>();
         int successCount = 0;
         int failCount = 0;
 
-        foreach (var entry in objectMapping)
+        var objectList = objectMapping.ToList();
+
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = _parallelTables
+        };
+
+        Log.Information("Processing {Count} objects in parallel (max {Parallel} concurrent)", 
+            objectList.Count, _parallelTables);
+
+        Parallel.ForEach(objectList, parallelOptions, entry =>
         {
             string sourceObject = entry.Key;
             string targetObject = entry.Value.targetObject;
             DatabaseObjectType objectType = entry.Value.objectType;
 
             string objectTypeStr = objectType == DatabaseObjectType.Table ? "Table" : "View";
+            int threadId = Environment.CurrentManagedThreadId;
 
             Log.Information("");
             Log.Information(new string('-', 80));
-            Log.Information("Comparing {ObjectType}: {SourceObject} (Oracle) ↔ {TargetObject} (PostgreSQL)",
-                           objectTypeStr, sourceObject, targetObject);
+            Log.Information("[Thread {ThreadId}] Comparing {ObjectType}: {SourceObject} (Oracle) ↔ {TargetObject} (PostgreSQL)",
+                           threadId, objectTypeStr, sourceObject, targetObject);
             Log.Information(new string('-', 80));
 
             try
@@ -207,13 +228,15 @@ public class ComparisonDatabaseProcessor
 
                 if (result.IsMatch)
                 {
-                    successCount++;
-                    Log.Information("✓ {ObjectType}s match - migration validated successfully", objectTypeStr);
+                    Interlocked.Increment(ref successCount);
+                    Log.Information("[Thread {ThreadId}] ✓ {ObjectType}s match - migration validated successfully", 
+                        threadId, objectTypeStr);
                 }
                 else
                 {
-                    failCount++;
-                    Log.Warning("✗ {ObjectType}s differ - migration validation failed", objectTypeStr);
+                    Interlocked.Increment(ref failCount);
+                    Log.Warning("[Thread {ThreadId}] ✗ {ObjectType}s differ - migration validation failed", 
+                        threadId, objectTypeStr);
                     Log.Warning("  Missing in PostgreSQL: {Count} rows", result.MissingInTarget);
                     Log.Warning("  Extra in PostgreSQL: {Count} rows", result.ExtraInTarget);
                     Log.Warning("  Mismatched rows: {Count}", result.MismatchedRows);
@@ -221,16 +244,18 @@ public class ComparisonDatabaseProcessor
             }
             catch (Exception ex)
             {
-                failCount++;
-                Log.Error(ex, "✗ Failed to compare {ObjectType}s: {SourceObject} ↔ {TargetObject}",
-                         objectTypeStr, sourceObject, targetObject);
+                Interlocked.Increment(ref failCount);
+                Log.Error(ex, "[Thread {ThreadId}] ✗ Failed to compare {ObjectType}s: {SourceObject} ↔ {TargetObject}",
+                         threadId, objectTypeStr, sourceObject, targetObject);
                 var errorResult = new ComparisonResult(sourceObject, targetObject, objectType)
                 {
                     Error = ex.Message
                 };
                 allResults.Add(errorResult);
             }
-        }
+        });
+
+        var resultsList = allResults.ToList();
 
         Log.Information("");
         Log.Information(new string('=', 80));
@@ -271,15 +296,15 @@ public class ComparisonDatabaseProcessor
 
             var markdownWriter = new DataValidationMarkdownWriter();
             var markdownReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.md");
-            markdownWriter.WriteMarkdownReport(allResults, markdownReportPath, _oracleDatabase, _postgresDatabase);
+            markdownWriter.WriteMarkdownReport(resultsList, markdownReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Markdown report saved to: {ReportPath}", markdownReportPath);
 
-            string textReportPath = _reportWriter.GenerateDetailedReport(allResults, schemaPrefix, _oracleDatabase, _postgresDatabase);
+            string textReportPath = _reportWriter.GenerateDetailedReport(resultsList, schemaPrefix, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Text report saved to: {ReportPath}", textReportPath);
 
             var htmlWriter = new DataValidationHtmlWriter();
             var htmlReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.html");
-            htmlWriter.WriteHtmlReport(allResults, htmlReportPath, _oracleDatabase, _postgresDatabase);
+            htmlWriter.WriteHtmlReport(resultsList, htmlReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 HTML report saved to: {ReportPath}", htmlReportPath);
         }
         catch (Exception ex)

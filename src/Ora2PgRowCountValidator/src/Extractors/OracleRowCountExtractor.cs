@@ -2,6 +2,8 @@ using Oracle.ManagedDataAccess.Client;
 using Ora2PgRowCountValidator.Models;
 using Serilog;
 using Ora2Pg.Common.Util;
+using Ora2Pg.Common.Config;
+using System.Collections.Concurrent;
 
 namespace Ora2PgRowCountValidator.Extractors;
 
@@ -10,36 +12,39 @@ public class OracleRowCountExtractor
 {
     private readonly string _connectionString;
     private readonly int _commandTimeoutSeconds;
+    private readonly int _parallelTables;
 
     public OracleRowCountExtractor(string connectionString, int commandTimeoutSeconds = 300)
     {
         _connectionString = connectionString;
         _commandTimeoutSeconds = commandTimeoutSeconds;
+        _parallelTables = ApplicationProperties.Instance.GetInt("PARALLEL_TABLES", 4);
     }
 
 
     public async Task<List<TableRowCount>> ExtractRowCountsAsync(string schemaName)
     {
-        var rowCounts = new List<TableRowCount>();
-
-        using var connection = new OracleConnection(_connectionString);
-        await connection.OpenAsync();
-
-        var tableQuery = @"
-            SELECT table_name
-            FROM all_tables
-            WHERE owner = :schemaName
-            AND table_name NOT LIKE 'BIN$%'
-            ORDER BY table_name";
-
         var tableNames = new List<string>();
-        using (var cmd = new OracleCommand(tableQuery, connection))
+
+        using (var connection = new OracleConnection(_connectionString))
         {
-            cmd.Parameters.Add("schemaName", OracleDbType.Varchar2).Value = schemaName.ToUpper();
-            using var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
+            await connection.OpenAsync();
+
+            var tableQuery = @"
+                SELECT table_name
+                FROM all_tables
+                WHERE owner = :schemaName
+                AND table_name NOT LIKE 'BIN$%'
+                ORDER BY table_name";
+
+            using (var cmd = new OracleCommand(tableQuery, connection))
             {
-                tableNames.Add(reader.GetString(0));
+                cmd.Parameters.Add("schemaName", OracleDbType.Varchar2).Value = schemaName.ToUpper();
+                using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    tableNames.Add(reader.GetString(0));
+                }
             }
         }
 
@@ -54,16 +59,26 @@ public class OracleRowCountExtractor
         tableNames = filteredTables;
 
         Log.Information($"Found {tableNames.Count} tables in Oracle schema {schemaName}");
+        Log.Information("Processing tables in parallel (max {Parallel} concurrent)", _parallelTables);
 
+        var rowCounts = new ConcurrentBag<TableRowCount>();
 
-        foreach (var tableName in tableNames)
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = _parallelTables
+        };
+
+        await Parallel.ForEachAsync(tableNames, parallelOptions, async (tableName, cancellationToken) =>
         {
             try
             {
+                using var connection = new OracleConnection(_connectionString);
+                await connection.OpenAsync(cancellationToken);
+
                 var countQuery = $"SELECT COUNT(*) FROM {schemaName.ToUpper()}.{tableName}";
                 using var cmd = new OracleCommand(countQuery, connection);
                 cmd.CommandTimeout = _commandTimeoutSeconds;
-                var count = Convert.ToInt64(await cmd.ExecuteScalarAsync());
+                var count = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken));
 
                 rowCounts.Add(new TableRowCount
                 {
@@ -85,7 +100,8 @@ public class OracleRowCountExtractor
                     RowCount = -1
                 });
             }
-        }
-        return rowCounts;
+        });
+
+        return rowCounts.OrderBy(r => r.TableName).ToList();
     }
 }
