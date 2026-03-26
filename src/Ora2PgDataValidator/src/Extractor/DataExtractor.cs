@@ -387,8 +387,8 @@ public class DataExtractor
         string orderByClause;
         if (metadata.PrimaryKeyColumns.Count > 0)
         {
-            orderByClause = string.Join(", ", metadata.PrimaryKeyColumns.Select(pk => $"{QuoteIdentifier(pk)} DESC"));
-            Log.Debug("Ordering by primary key columns (DESC): {OrderBy}", orderByClause);
+            orderByClause = string.Join(", ", metadata.PrimaryKeyColumns.Select(pk => $"{QuoteIdentifier(pk)} ASC NULLS FIRST"));
+            Log.Debug("Ordering by primary key columns (ASC NULLS FIRST): {OrderBy}", orderByClause);
         }
         else
         {
@@ -400,13 +400,13 @@ public class DataExtractor
             
             if (idColumn != null)
             {
-                orderByClause = $"{QuoteIdentifier(idColumn.Name)} DESC";
-                Log.Debug("No primary key found - ordering by ID column (DESC): {OrderBy}", orderByClause);
+                orderByClause = $"{QuoteIdentifier(idColumn.Name)} ASC NULLS FIRST";
+                Log.Debug("No primary key found - ordering by ID column (ASC NULLS FIRST): {OrderBy}", orderByClause);
             }
             else if (metadata.Columns.Count > 0)
             {
-                orderByClause = $"{QuoteIdentifier(metadata.Columns[0].Name)} DESC";
-                Log.Debug("No primary key or ID column - ordering by first column (DESC): {OrderBy}", orderByClause);
+                orderByClause = $"{QuoteIdentifier(metadata.Columns[0].Name)} ASC NULLS FIRST";
+                Log.Debug("No primary key or ID column - ordering by first column (ASC NULLS FIRST): {OrderBy}", orderByClause);
             }
             else
             {
