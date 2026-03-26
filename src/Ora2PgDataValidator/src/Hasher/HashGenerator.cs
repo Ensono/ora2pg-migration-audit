@@ -113,7 +113,12 @@ public static class HashGenerator
 
         if (value is string strVal)
         {
-            return strVal.TrimEnd();
+            if (strVal.Length >= 8 && IsLikelyGuidString(strVal))
+            {
+                return strVal.ToLowerInvariant();
+            }
+            
+            return strVal.TrimEnd(); // Only trim trailing whitespace (Oracle CHAR padding)
         }
 
         if (value is char charVal)
@@ -122,6 +127,24 @@ public static class HashGenerator
         }
 
         return value.ToString() ?? "NULL";
+    }
+    
+    private static bool IsLikelyGuidString(string value)
+    {
+        bool hasHyphen = false;
+        foreach (char c in value)
+        {
+            if (c == '-')
+            {
+                hasHyphen = true;
+            }
+            else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+            {
+                return false; // Not a hex character
+            }
+        }
+        
+        return hasHyphen || value.Length == 32;
     }
     
     public static string GenerateHash(string input, string algorithm = "SHA256")

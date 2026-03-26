@@ -459,32 +459,85 @@ public class DataExtractor
         }
     }
 
+    private string BuildOrderByExpression(string columnName, string columnType)
+    {
+        var quotedName = QuoteIdentifier(columnName);
+        var typeUpper = (columnType ?? "").ToUpperInvariant();
+        
+        Log.Debug("BuildOrderByExpression: column={Column}, type={Type}", columnName, columnType);
+        
+        bool isStringType = typeUpper.Contains("CHAR") || typeUpper.Contains("TEXT") ||
+                           typeUpper.Contains("STRING") || typeUpper.Contains("VARCHAR") ||
+                           typeUpper.Contains("CLOB") || typeUpper.Contains("NCLOB");
+        
+        if (isStringType)
+        {
+            return $"UPPER({quotedName}) ASC NULLS FIRST";
+        }
+        else
+        {
+            return $"{quotedName} ASC NULLS FIRST";
+        }
+    }
 
     private string BuildSelectQuery(string tableReference, TableMetadata metadata)
     {
         string orderByClause;
         if (metadata.PrimaryKeyColumns.Count > 0)
         {
-            orderByClause = string.Join(", ", metadata.PrimaryKeyColumns.Select(pk => $"{QuoteIdentifier(pk)} ASC NULLS FIRST"));
-            Log.Debug("Ordering by primary key columns (ASC NULLS FIRST): {OrderBy}", orderByClause);
+            var orderByParts = metadata.PrimaryKeyColumns.Select(pk =>
+            {
+                var col = metadata.Columns.FirstOrDefault(c => c.Name.Equals(pk, StringComparison.OrdinalIgnoreCase));
+                if (col == null)
+                {
+                    Log.Warning("PK column {PkColumn} not found in metadata.Columns for ORDER BY", pk);
+                }
+                return BuildOrderByExpression(pk, col?.Type ?? "UNKNOWN");
+            });
+            orderByClause = string.Join(", ", orderByParts);
+            Log.Debug("Ordering by primary key columns: {OrderBy}", orderByClause);
         }
         else
         {
-            var idColumn = metadata.Columns.FirstOrDefault(c =>
-                c.Name.Equals("id", StringComparison.OrdinalIgnoreCase) ||
-                c.Name.Equals("ID", StringComparison.OrdinalIgnoreCase) ||
-                c.Name.EndsWith("_id", StringComparison.OrdinalIgnoreCase) ||
-                c.Name.EndsWith("_ID", StringComparison.OrdinalIgnoreCase));
+            var idColumns = metadata.Columns
+                .Where(c => c.Name.Equals("id", StringComparison.OrdinalIgnoreCase) ||
+                           c.Name.EndsWith("_id", StringComparison.OrdinalIgnoreCase) ||
+                           c.Name.EndsWith("id", StringComparison.OrdinalIgnoreCase))
+                .ToList();
             
-            if (idColumn != null)
+            var idColumnNames = idColumns.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var additionalOrderableColumns = metadata.Columns
+                .Where(c => IsOrderableColumnType(c.Type) && !idColumnNames.Contains(c.Name))
+                .ToList();
+            
+            var orderColumns = new List<TableMetadata.ColumnMetadata>();
+            orderColumns.AddRange(idColumns);
+            
+            int columnsNeeded = Math.Max(2, 6 - orderColumns.Count);
+            orderColumns.AddRange(additionalOrderableColumns.Take(columnsNeeded));
+            
+            orderColumns = orderColumns.Take(6).ToList();
+            
+            if (orderColumns.Count > 0)
             {
-                orderByClause = $"{QuoteIdentifier(idColumn.Name)} ASC NULLS FIRST";
-                Log.Debug("No primary key found - ordering by ID column (ASC NULLS FIRST): {OrderBy}", orderByClause);
+                var orderByParts = orderColumns.Select(c => BuildOrderByExpression(c.Name, c.Type));
+                orderByClause = string.Join(", ", orderByParts);
+                
+                if (idColumns.Count > 0)
+                {
+                    Log.Debug("No primary key found - ordering by {IdCount} ID column(s) + {AdditionalCount} additional column(s): {OrderBy}", 
+                        idColumns.Count, orderColumns.Count - idColumns.Count, orderByClause);
+                }
+                else
+                {
+                    Log.Warning("No primary key or ID columns found - ordering by first {Count} orderable column(s): {OrderBy}", 
+                        orderColumns.Count, orderByClause);
+                }
             }
             else if (metadata.Columns.Count > 0)
             {
-                orderByClause = $"{QuoteIdentifier(metadata.Columns[0].Name)} ASC NULLS FIRST";
-                Log.Debug("No primary key or ID column - ordering by first column (ASC NULLS FIRST): {OrderBy}", orderByClause);
+                orderByClause = BuildOrderByExpression(metadata.Columns[0].Name, metadata.Columns[0].Type);
+                Log.Warning("No orderable columns found - using first column as fallback: {OrderBy}", orderByClause);
             }
             else
             {
