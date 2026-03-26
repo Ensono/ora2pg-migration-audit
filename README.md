@@ -2,7 +2,10 @@
 
 **Generic, database-agnostic tools for validating any Oracle to PostgreSQL migration.**
 
-This solution provides production-ready validation tools that work with **any Oracle and PostgreSQL database** - not limited to specific schemas or sample databases.
+This solution provides production-ready validation tools that work with **any Oracle and PostgreSQL database** - not limited to specific schemas or sample| `BLOB_SIZE_LIMIT=2000` | 🏃 Fast | Max allowed (Oracle limit) |
+| Default (0) | Slow | Full LOB transferred |
+
+> **⚠️ Important:** `LOB_SIZE_LIMIT` must be 2000 or less. Values greater than 2000 will cause the validator to fail immediately with an error. This limit applies to both BLOB and CLOB columns for consistent hash comparison between Oracle and PostgreSQL.abases.
 
 ## What's Included
 
@@ -218,6 +221,93 @@ reports/
 ```
 
 The database name prefix (e.g., `mydb`) comes from the `POSTGRES_DB` environment variable.
+
+### Performance Optimization Settings
+
+The validators support extensive performance tuning options for faster execution:
+
+#### Parallel Processing
+
+```dotenv
+# Number of tables processed in parallel within each schema (default: 4)
+# Affects: DataValidator, RowCountValidator, SchemaComparer
+PARALLEL_TABLES=4
+
+# Number of schemas processed in parallel in multi-schema mode (default: 1)
+# Affects: DataValidator, RowCountValidator
+# Set to 2+ for parallel schema processing (logs may interleave)
+PARALLEL_SCHEMAS=1
+
+# Total parallelism = PARALLEL_SCHEMAS × PARALLEL_TABLES
+# Example: PARALLEL_SCHEMAS=2, PARALLEL_TABLES=4 = up to 8 concurrent operations
+```
+
+**Parallel processing matrix:**
+
+| Validator | Parallel Tables | Parallel Schemas | Notes |
+|-----------|-----------------|------------------|-------|
+| DataValidator | ✅ | ✅ | Full parallel support |
+| RowCountValidator | ✅ | ✅ | Full parallel support |
+| SchemaComparer | ✅ (objects) | ❌ | Parallel object extraction |
+| DataTypeValidator | N/A | ❌ | Single-query extraction |
+| PerformanceValidator | ❌ | ❌ | Sequential for timing accuracy |
+
+#### LOB (BLOB/CLOB) Data Optimization (Data Validator)
+
+Processing tables with LOB columns (BLOB, CLOB) can be slow. Use these options to speed up validation:
+
+```dotenv
+# Skip LOB columns entirely (fastest option)
+# Set to true if you only care about non-LOB data integrity
+# Applies to: BLOB, CLOB, NCLOB (Oracle) and bytea, text (PostgreSQL)
+SKIP_LOB_COLUMNS=false
+
+# Limit bytes fetched from LOB columns at DATABASE LEVEL (0 = unlimited)
+# Uses DBMS_LOB.SUBSTR (Oracle) or substring (PostgreSQL) in SQL query
+# This provides REAL performance improvement by reducing network transfer
+#
+# IMPORTANT: Maximum value is 2000 bytes.
+# Oracle DBMS_LOB.SUBSTR returns RAW type (for BLOB), limited to 2000 bytes.
+# The same limit is applied to CLOB for consistent hash comparison.
+# Setting a value > 2000 will cause the validator to fail with an error.
+#
+# Examples:
+#   0     = Fetch entire LOB (slowest, most accurate)
+#   1024  = Fetch first 1KB only (very fast)
+#   2000  = Maximum allowed (Oracle limit)
+LOB_SIZE_LIMIT=0
+```
+
+**Performance comparison:**
+
+| Configuration | Speed | How it works |
+|---------------|-------|--------------|
+| `SKIP_LOB_COLUMNS=true` | ⚡ Fastest | LOBs excluded from SELECT query |
+| `LOB_SIZE_LIMIT=1024` | 🚀 Very Fast | Only 1KB transferred per LOB |
+| `LOB_SIZE_LIMIT=2000` | 🏃 Fast | Max 2KB (Oracle limit) |
+| Default (0) | � Slow | Full BLOB transferred |
+
+> **Note:** Oracle BLOB columns are limited to 2000 bytes max due to SQL RAW type constraints. CLOB columns are limited to 4000 bytes. PostgreSQL bytea columns have no such limit.
+
+#### Query Timeout Settings
+
+```dotenv
+# Database command timeout in seconds (default: 600 = 10 minutes)
+# Increase for very large tables or slow networks
+COMMAND_TIMEOUT_SECONDS=600
+
+# For row count validation with tables >100M rows, consider 1800 seconds (30 min)
+```
+
+#### Row Limiting
+
+```dotenv
+# Limit rows per table for faster testing (0 = unlimited)
+MAX_ROWS_PER_TABLE=0
+
+# Useful for initial validation runs on large databases
+# Example: MAX_ROWS_PER_TABLE=10000 for quick sanity checks
+```
 
 ### 2. Build and Run
 
@@ -455,6 +545,8 @@ Main application for validating Oracle to PostgreSQL data migrations using crypt
 - Generates SHA256/MD5 hash fingerprints for each row
 - Compares hashes to identify mismatches, missing rows, and extra rows
 - **Column filtering** - Skip additional columns via environment variables (e.g., audit columns in PostgreSQL)
+- **BLOB optimization** - Skip or limit BLOB columns for faster processing
+- **Parallel processing** - Process multiple tables and schemas concurrently
 - Generates detailed validation reports (Markdown, HTML, Text)
 
 **Dependencies:**
@@ -479,6 +571,7 @@ Schema object comparison tool for Oracle to PostgreSQL migrations following the 
   - FKs can be excluded via `IGNORED_OBJECTS=foreignkey=FK_NAME` or `fk=FK_NAME`
 - Compares indexes (B-Tree, Unique, Function-based)
 - Validates database code (Views, Materialized Views, Sequences, Triggers, Procedures)
+- **Parallel extraction**: Extracts schema objects (constraints, indexes, etc.) concurrently
 - Generates P2.1 compliance checklist reports
 
 **Dependencies:**
@@ -538,6 +631,7 @@ Row count validation tool that compares table row counts between Oracle and Post
 - ✅ **Intelligent Comparison**: Configurable thresholds for warning vs error classification
 - ✅ **Missing/Extra Detection**: Identifies tables that exist in only one database
 - ✅ **Percentage-Based Analysis**: Calculates row count difference percentages
+- ✅ **Parallel Processing**: Process multiple tables and schemas concurrently
 - ✅ **Dual Report Formats**: Generates both Markdown (.md) and Plain Text (.txt) reports
 - ✅ **Severity Levels**: Critical/Error/Warning/Info classification
 

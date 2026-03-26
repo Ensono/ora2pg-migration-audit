@@ -13,6 +13,15 @@ public class DataExtractor
     private readonly int _maxRowsPerTable;
     private readonly int _commandTimeoutSeconds;
     private readonly HashSet<string> _columnsToSkip;
+    private readonly bool _skipLobColumns;
+    private readonly int _lobSizeLimit;
+
+    private static readonly HashSet<string> LobColumnTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "BLOB", "CLOB", "NCLOB", "BFILE", "LONG RAW", "RAW", "LONG",  // Oracle native types
+        "BYTEA", "OID", "TEXT",                                        // PostgreSQL native types
+        "SYSTEM.BYTE[]", "BYTE[]"                                      // .NET binary representations
+    };
 
     public DataExtractor(IDbConnection connection, DatabaseType databaseType)
     {
@@ -25,6 +34,34 @@ public class DataExtractor
 
         _commandTimeoutSeconds = props.GetInt("COMMAND_TIMEOUT_SECONDS",
                                              props.GetInt("command.timeout.seconds", 300));
+        
+        _skipLobColumns = props.Get("SKIP_LOB_COLUMNS",
+                                    props.Get("SKIP_BLOB_COLUMNS", "false"))
+                               .Equals("true", StringComparison.OrdinalIgnoreCase);
+        if (_skipLobColumns)
+        {
+            Log.Information("LOB column skipping enabled - BLOB/CLOB/bytea/text columns will be excluded from data extraction");
+        }
+        
+        _lobSizeLimit = props.GetInt("LOB_SIZE_LIMIT", props.GetInt("BLOB_SIZE_LIMIT", 0));
+        
+        const int MaxLobLimit = 2000;
+        if (_lobSizeLimit > MaxLobLimit)
+        {
+            Log.Error("LOB_SIZE_LIMIT={Limit} exceeds maximum of {Max} bytes. " +
+                     "Oracle DBMS_LOB.SUBSTR returns RAW (for BLOB) or VARCHAR2 (for CLOB), " +
+                     "limited to {Max} bytes in SQL context for consistent hashing. " +
+                     "Please set LOB_SIZE_LIMIT to {Max} or less, or use SKIP_LOB_COLUMNS=true.",
+                     _lobSizeLimit, MaxLobLimit, MaxLobLimit);
+            throw new InvalidOperationException(
+                $"LOB_SIZE_LIMIT={_lobSizeLimit} exceeds maximum of {MaxLobLimit} bytes. " +
+                $"Set LOB_SIZE_LIMIT to {MaxLobLimit} or less, or use SKIP_LOB_COLUMNS=true.");
+        }
+        
+        if (_lobSizeLimit > 0 && !_skipLobColumns)
+        {
+            Log.Information("LOB size limit enabled: Only first {Limit} bytes will be fetched from BLOB/CLOB columns", _lobSizeLimit);
+        }
 
         string skipColumnsConfig = databaseType == DatabaseType.PostgreSQL
             ? props.Get("POSTGRES_SKIP_COLUMNS", "")
@@ -90,16 +127,31 @@ public class DataExtractor
             {
                 int position = 1;
                 int skippedCount = 0;
+                int blobSkippedCount = 0;
                 foreach (DataRow row in schemaTable.Rows)
                 {
                     string columnName = row["ColumnName"].ToString() ?? "";
-                    string columnType = row["DataType"].ToString() ?? "";
+                    string columnType = schemaTable.Columns.Contains("DataTypeName") && row["DataTypeName"] != DBNull.Value
+                        ? row["DataTypeName"].ToString() ?? ""
+                        : row["DataType"].ToString() ?? "";
                     bool isKey = row["IsKey"] != DBNull.Value && (bool)row["IsKey"];
+                    
+                    Log.Debug("Column schema: {ColumnName} = {ColumnType} (native), {NetType} (.NET)", 
+                        columnName, columnType, row["DataType"]);
 
                     if (_columnsToSkip.Contains(columnName))
                     {
                         skippedCount++;
                         Log.Debug("Skipping column: {ColumnName} in table {TableReference}", columnName, tableReference);
+                        continue;
+                    }
+                    
+                    // Skip LOB columns if SKIP_LOB_COLUMNS is enabled
+                    if (_skipLobColumns && IsLobColumnType(columnType))
+                    {
+                        blobSkippedCount++;
+                        Log.Debug("Skipping LOB column: {ColumnName} ({ColumnType}) in table {TableReference}", 
+                            columnName, columnType, tableReference);
                         continue;
                     }
 
@@ -115,7 +167,13 @@ public class DataExtractor
 
                 if (skippedCount > 0)
                 {
-                    Log.Information("Skipped {Count} column(s) in table {TableReference}", skippedCount, tableReference);
+                    Log.Information("Skipped {Count} configured column(s) in table {TableReference}", skippedCount, tableReference);
+                }
+                
+                if (blobSkippedCount > 0)
+                {
+                    Log.Information("Skipped {Count} BLOB/binary column(s) in table {TableReference} (SKIP_BLOB_COLUMNS=true)", 
+                        blobSkippedCount, tableReference);
                 }
             }
         }
@@ -172,6 +230,26 @@ public class DataExtractor
         }
 
         return new TableMetadata(tableReference, columns, primaryKeyColumns);
+    }
+
+    private bool IsLobColumnType(string columnType)
+    {
+        if (string.IsNullOrWhiteSpace(columnType))
+        {
+            return false;
+        }
+
+        var typeUpper = columnType.ToUpperInvariant();
+        
+        foreach (var lobType in LobColumnTypes)
+        {
+            if (typeUpper.Contains(lobType, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        
+        return false;
     }
 
     private bool IsOrderableColumnType(string columnType)
@@ -418,7 +496,31 @@ public class DataExtractor
         string columnList;
         if (metadata.Columns.Count > 0)
         {
-            columnList = string.Join(", ", metadata.Columns.Select(c => QuoteIdentifier(c.Name)));
+            var columnExpressions = new List<string>();
+            int lobLimitedCount = 0;
+            foreach (var col in metadata.Columns)
+            {
+                if (_lobSizeLimit > 0 && IsLobColumnType(col.Type))
+                {
+                    var limitedCol = BuildLobLimitedColumn(col.Name, col.Type);
+                    columnExpressions.Add(limitedCol);
+                    lobLimitedCount++;
+                    Log.Debug("LOB column {Column} ({Type}) will be limited to {Limit} bytes: {Expr}", 
+                        col.Name, col.Type, _lobSizeLimit, limitedCol);
+                }
+                else
+                {
+                    columnExpressions.Add(QuoteIdentifier(col.Name));
+                }
+            }
+            
+            if (lobLimitedCount > 0)
+            {
+                Log.Information("Applied LOB size limit ({Limit} bytes) to {Count} column(s) in {Table}", 
+                    _lobSizeLimit, lobLimitedCount, tableReference);
+            }
+            
+            columnList = string.Join(", ", columnExpressions);
         }
         else
         {
@@ -441,6 +543,46 @@ public class DataExtractor
         }
 
         return sql.ToString();
+    }
+
+    private string BuildLobLimitedColumn(string columnName, string columnType)
+    {
+        var quotedName = QuoteIdentifier(columnName);
+        var typeUpper = columnType.ToUpperInvariant();
+        
+        var effectiveLimit = Math.Min(_lobSizeLimit, 2000);
+
+        if (_databaseType == DatabaseType.Oracle)
+        {
+            if (typeUpper.Contains("BYTE[]") || typeUpper.Contains("BYTE") ||
+                typeUpper.Contains("BLOB"))
+            {
+                return $"CASE WHEN {quotedName} IS NOT NULL AND DBMS_LOB.GETLENGTH({quotedName}) > 0 " +
+                       $"THEN DBMS_LOB.SUBSTR({quotedName}, {effectiveLimit}, 1) ELSE NULL END AS {quotedName}";
+            }
+            else if (typeUpper.Contains("CLOB") || typeUpper.Contains("NCLOB"))
+            {
+                return $"CASE WHEN {quotedName} IS NOT NULL AND DBMS_LOB.GETLENGTH({quotedName}) > 0 " +
+                       $"THEN TO_CHAR(DBMS_LOB.SUBSTR({quotedName}, {effectiveLimit}, 1)) ELSE NULL END AS {quotedName}";
+            }
+            else if (typeUpper.Contains("RAW"))
+            {
+                return $"SUBSTR({quotedName}, 1, {effectiveLimit}) AS {quotedName}";
+            }
+        }
+        else if (_databaseType == DatabaseType.PostgreSQL)
+        {
+            if (typeUpper.Contains("BYTEA") || typeUpper.Contains("BYTE[]") || typeUpper.Contains("BYTE"))
+            {
+                return $"substring({quotedName} from 1 for {effectiveLimit}) AS {quotedName}";
+            }
+            else if (typeUpper.Contains("TEXT"))
+            {
+                return $"substring({quotedName} from 1 for {effectiveLimit}) AS {quotedName}";
+            }
+        }
+        
+        return quotedName;
     }
 
     private string QuoteIdentifier(string identifier)

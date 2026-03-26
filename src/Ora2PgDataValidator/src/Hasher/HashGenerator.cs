@@ -1,10 +1,22 @@
 using System.Security.Cryptography;
 using System.Text;
+using Ora2Pg.Common.Config;
 
 namespace Ora2PgDataValidator.Hasher;
 
 public static class HashGenerator
 {
+    private static readonly bool _skipBlobColumns;
+    
+    static HashGenerator()
+    {
+        var props = ApplicationProperties.Instance;
+        
+        _skipBlobColumns = props.Get("SKIP_LOB_COLUMNS",
+                                     props.Get("SKIP_BLOB_COLUMNS", "false"))
+                                .Equals("true", StringComparison.OrdinalIgnoreCase);
+    }
+    
     public static string GenerateHash(Dictionary<string, object?> rowData, string algorithm = "SHA256")
     {
         var sortedKeys = rowData.Keys.OrderBy(k => k).ToList();
@@ -44,6 +56,12 @@ public static class HashGenerator
 
         if (value is byte[] bytes)
         {
+            // Skip BLOB columns if configured
+            if (_skipBlobColumns)
+            {
+                return "BLOB_SKIPPED";
+            }
+            
             return Convert.ToHexString(bytes).ToLower();
         }
 

@@ -6,6 +6,7 @@ using Ora2PgRowCountValidator.Writers;
 using Serilog;
 using System.Diagnostics;
 using Ora2PgRowCountValidator.src.Writers;
+using System.Collections.Concurrent;
 
 namespace Ora2PgRowCountValidator;
 
@@ -99,7 +100,7 @@ class Program
             var postgresConnString = postgresConfig.GetPostgresConnectionString();
 
             int maxExitCode = 0;
-            var allSchemaResults = new List<(string OracleSchema, string PostgresSchema, Ora2PgRowCountValidator.Models.ValidationResult Result)>();
+            var allSchemaResults = new ConcurrentBag<(string OracleSchema, string PostgresSchema, Ora2PgRowCountValidator.Models.ValidationResult Result)>();
             var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             var reportsDir = props.GetReportsDirectory("Ora2PgRowCountValidator");
             
@@ -107,74 +108,55 @@ class Program
             var commandTimeoutSeconds = props.GetInt("COMMAND_TIMEOUT_SECONDS", 600);
             Log.Information("Using query timeout: {Timeout} seconds", commandTimeoutSeconds);
 
-            for (int i = 0; i < oracleSchemas.Length; i++)
+            // Check if parallel schema processing is enabled
+            var parallelSchemas = props.GetInt("PARALLEL_SCHEMAS", 1);
+            var processInParallel = parallelSchemas > 1 && oracleSchemas.Length > 1;
+
+            if (processInParallel)
             {
-                string oracleSchema = oracleSchemas[i];
-                string postgresSchema = postgresSchemas[i];
+                Log.Information("Processing {Count} schemas in parallel (max {Parallel} concurrent)", 
+                    oracleSchemas.Length, parallelSchemas);
 
-                Log.Information("");
-                Log.Information("═══════════════════════════════════════════════════════════");
-                Log.Information("  Schema Pair {Index}/{Total}: {OracleSchema} → {PostgresSchema}", 
-                    i + 1, oracleSchemas.Length, oracleSchema, postgresSchema);
-                Log.Information("═══════════════════════════════════════════════════════════");
+                var schemaList = oracleSchemas.Zip(postgresSchemas, (o, p) => (Oracle: o, Postgres: p)).ToList();
+                var exitCodes = new ConcurrentBag<int>();
 
-                var stopwatch = Stopwatch.StartNew();
-                
-                Log.Information($"📊 Extracting row counts from Oracle schema '{oracleSchema}'...");
-                var oracleExtractor = new OracleRowCountExtractor(oracleConnString, commandTimeoutSeconds);
-                var oracleCounts = await oracleExtractor.ExtractRowCountsAsync(oracleSchema);
-                Log.Information($"✓ Found {oracleCounts.Count} tables in Oracle (Total: {oracleCounts.Sum(t => t.RowCount):N0} rows)");
+                await Parallel.ForEachAsync(schemaList, new ParallelOptions { MaxDegreeOfParallelism = parallelSchemas }, 
+                    async (schemaPair, cancellationToken) =>
+                {
+                    var (oracleSchema, postgresSchema) = schemaPair;
+                    var exitCode = await ProcessSchemaAsync(
+                        oracleSchema, postgresSchema, 
+                        oracleConnString, postgresConnString,
+                        commandTimeoutSeconds, props, reportsDir, timestamp,
+                        allSchemaResults);
+                    exitCodes.Add(exitCode);
+                });
 
-                Log.Information($"📊 Extracting row counts from PostgreSQL schema '{postgresSchema}'...");
-                var postgresExtractor = new PostgresRowCountExtractor(postgresConnString, commandTimeoutSeconds);
-                var postgresCounts = await postgresExtractor.ExtractRowCountsAsync(postgresSchema);
-                Log.Information($"✓ Found {postgresCounts.Count} tables in PostgreSQL (Total: {postgresCounts.Sum(t => t.RowCount):N0} rows)");
-
-                Log.Information("🔍 Comparing row counts...");
-                var comparer = new RowCountComparer(
-                    oracleConnString, 
-                    postgresConnString, 
-                    enableDetailedComparison: true);
-                
-                var result = await comparer.CompareAsync(
-                    oracleCounts,
-                    postgresCounts,
-                    oracleSchema,
-                    postgresSchema
-                );
-
-                result.OracleDatabase = props.Get("ORACLE_SERVICE", "");
-                result.PostgresDatabase = props.Get("POSTGRES_DB", "");
-
-                stopwatch.Stop();
-                Log.Information($"✓ Comparison completed in {stopwatch.Elapsed.TotalSeconds:F2} seconds");
-                Log.Information($"  - Matches: {result.TablesWithMatchingCounts}");
-                Log.Information($"  - Mismatches: {result.TablesWithMismatchedCounts}");
-                Log.Information($"  - Only in Oracle: {result.TablesOnlyInOracle}");
-                Log.Information($"  - Only in PostgreSQL: {result.TablesOnlyInPostgres}");
-
-                allSchemaResults.Add((oracleSchema, postgresSchema, result));
-
-                Log.Information("📝 Generating reports...");
-
-                var dbName = props.Get("POSTGRES_DB", "").ToLower();
-                var dbPrefix = string.IsNullOrEmpty(dbName) ? "" : $"{dbName}-";
-                var schemaPrefix = $"{dbPrefix}{oracleSchema.ToLower()}-";
-                var baseReportPath = Path.Combine(reportsDir, $"{schemaPrefix}rowcount-validation-{timestamp}");
-
-                var reportWriter = new ValidationReportWriter();
-                await reportWriter.WriteReportsAsync(result, baseReportPath);
-
-                var htmlWriter = new ValidationReportHtmlWriter();
-                htmlWriter.WriteHtmlReport(result, oracleSchema, postgresSchema, $"{baseReportPath}.html");
-
-                reportWriter.WriteConsoleReport(result);
-
-                var exitCode = GetExitCode(result);
-                maxExitCode = Math.Max(maxExitCode, exitCode);
-
-                Log.Information("✓ Schema pair validation complete");
+                maxExitCode = exitCodes.DefaultIfEmpty(0).Max();
             }
+            else
+            {
+                for (int i = 0; i < oracleSchemas.Length; i++)
+                {
+                    string oracleSchema = oracleSchemas[i];
+                    string postgresSchema = postgresSchemas[i];
+
+                    Log.Information("");
+                    Log.Information("═══════════════════════════════════════════════════════════");
+                    Log.Information("  Schema Pair {Index}/{Total}: {OracleSchema} → {PostgresSchema}", 
+                        i + 1, oracleSchemas.Length, oracleSchema, postgresSchema);
+                    Log.Information("═══════════════════════════════════════════════════════════");
+
+                    var exitCode = await ProcessSchemaAsync(
+                        oracleSchema, postgresSchema,
+                        oracleConnString, postgresConnString,
+                        commandTimeoutSeconds, props, reportsDir, timestamp,
+                        allSchemaResults);
+                    maxExitCode = Math.Max(maxExitCode, exitCode);
+                }
+            }
+
+            var allSchemaResultsList = allSchemaResults.ToList();
 
             if (oracleSchemas.Length > 1)
             {
@@ -186,7 +168,7 @@ class Program
                 
                 Log.Information("📝 Generating multi-schema summary report...");
                 var summaryWriter = new MultiSchemaSummaryWriter();
-                summaryWriter.WriteSummaryReport(allSchemaResults, reportsDir, timestamp);
+                summaryWriter.WriteSummaryReport(allSchemaResultsList, reportsDir, timestamp);
                 
                 if (maxExitCode == 99)
                 {
@@ -218,6 +200,75 @@ class Program
         {
             Log.CloseAndFlush();
         }
+    }
+
+    private static async Task<int> ProcessSchemaAsync(
+        string oracleSchema, 
+        string postgresSchema,
+        string oracleConnString,
+        string postgresConnString,
+        int commandTimeoutSeconds,
+        ApplicationProperties props,
+        string reportsDir,
+        string timestamp,
+        ConcurrentBag<(string OracleSchema, string PostgresSchema, Ora2PgRowCountValidator.Models.ValidationResult Result)> allSchemaResults)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        
+        Log.Information($"[{oracleSchema}] 📊 Extracting row counts from Oracle schema...");
+        var oracleExtractor = new OracleRowCountExtractor(oracleConnString, commandTimeoutSeconds);
+        var oracleCounts = await oracleExtractor.ExtractRowCountsAsync(oracleSchema);
+        Log.Information($"[{oracleSchema}] ✓ Found {oracleCounts.Count} tables in Oracle (Total: {oracleCounts.Sum(t => t.RowCount):N0} rows)");
+
+        Log.Information($"[{oracleSchema}] 📊 Extracting row counts from PostgreSQL schema '{postgresSchema}'...");
+        var postgresExtractor = new PostgresRowCountExtractor(postgresConnString, commandTimeoutSeconds);
+        var postgresCounts = await postgresExtractor.ExtractRowCountsAsync(postgresSchema);
+        Log.Information($"[{oracleSchema}] ✓ Found {postgresCounts.Count} tables in PostgreSQL (Total: {postgresCounts.Sum(t => t.RowCount):N0} rows)");
+
+        Log.Information($"[{oracleSchema}] 🔍 Comparing row counts...");
+        var comparer = new RowCountComparer(
+            oracleConnString, 
+            postgresConnString, 
+            enableDetailedComparison: true);
+        
+        var result = await comparer.CompareAsync(
+            oracleCounts,
+            postgresCounts,
+            oracleSchema,
+            postgresSchema
+        );
+
+        result.OracleDatabase = props.Get("ORACLE_SERVICE", "");
+        result.PostgresDatabase = props.Get("POSTGRES_DB", "");
+
+        stopwatch.Stop();
+        Log.Information($"[{oracleSchema}] ✓ Comparison completed in {stopwatch.Elapsed.TotalSeconds:F2} seconds");
+        Log.Information($"[{oracleSchema}]   - Matches: {result.TablesWithMatchingCounts}");
+        Log.Information($"[{oracleSchema}]   - Mismatches: {result.TablesWithMismatchedCounts}");
+        Log.Information($"[{oracleSchema}]   - Only in Oracle: {result.TablesOnlyInOracle}");
+        Log.Information($"[{oracleSchema}]   - Only in PostgreSQL: {result.TablesOnlyInPostgres}");
+
+        allSchemaResults.Add((oracleSchema, postgresSchema, result));
+
+        Log.Information($"[{oracleSchema}] 📝 Generating reports...");
+
+        var dbName = props.Get("POSTGRES_DB", "").ToLower();
+        var dbPrefix = string.IsNullOrEmpty(dbName) ? "" : $"{dbName}-";
+        var schemaPrefix = $"{dbPrefix}{oracleSchema.ToLower()}-";
+        var baseReportPath = Path.Combine(reportsDir, $"{schemaPrefix}rowcount-validation-{timestamp}");
+
+        var reportWriter = new ValidationReportWriter();
+        await reportWriter.WriteReportsAsync(result, baseReportPath);
+
+        var htmlWriter = new ValidationReportHtmlWriter();
+        htmlWriter.WriteHtmlReport(result, oracleSchema, postgresSchema, $"{baseReportPath}.html");
+
+        reportWriter.WriteConsoleReport(result);
+
+        var exitCode = GetExitCode(result);
+        Log.Information($"[{oracleSchema}] ✓ Schema pair validation complete (exit code: {exitCode})");
+        
+        return exitCode;
     }
 
     private static int GetExitCode(Ora2PgRowCountValidator.Models.ValidationResult result)
