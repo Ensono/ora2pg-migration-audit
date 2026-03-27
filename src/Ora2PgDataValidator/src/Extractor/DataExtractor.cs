@@ -472,7 +472,7 @@ public class DataExtractor
         
         if (isStringType)
         {
-            return $"UPPER({quotedName}) ASC NULLS FIRST";
+            return $"UPPER(TRIM({quotedName})) ASC NULLS FIRST";
         }
         else
         {
@@ -495,44 +495,57 @@ public class DataExtractor
                 return BuildOrderByExpression(pk, col?.Type ?? "UNKNOWN");
             });
             orderByClause = string.Join(", ", orderByParts);
-            Log.Debug("Ordering by primary key columns: {OrderBy}", orderByClause);
+            Log.Information("Ordering by primary key columns: {OrderBy}", orderByClause);
         }
         else
         {
+            Log.Debug("Table has {Count} columns: {Columns}",
+                metadata.Columns.Count, 
+                string.Join(", ", metadata.Columns.Select(c => $"{c.Name}({c.Type})")));
+            
             var idColumns = metadata.Columns
                 .Where(c => c.Name.Equals("id", StringComparison.OrdinalIgnoreCase) ||
                            c.Name.EndsWith("_id", StringComparison.OrdinalIgnoreCase) ||
                            c.Name.EndsWith("id", StringComparison.OrdinalIgnoreCase))
                 .ToList();
             
-            var idColumnNames = idColumns.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var additionalOrderableColumns = metadata.Columns
-                .Where(c => IsOrderableColumnType(c.Type) && !idColumnNames.Contains(c.Name))
+            Log.Debug("Found {Count} ID columns: {Columns}", 
+                idColumns.Count, 
+                string.Join(", ", idColumns.Select(c => c.Name)));
+            
+            var allOrderableColumns = metadata.Columns
+                .Where(c => IsOrderableColumnType(c.Type))
                 .ToList();
             
+            Log.Debug("Found {Count} total orderable columns: {Columns}", 
+                allOrderableColumns.Count, 
+                string.Join(", ", allOrderableColumns.Select(c => c.Name)));
+            
             var orderColumns = new List<TableMetadata.ColumnMetadata>();
+            
             orderColumns.AddRange(idColumns);
             
-            int columnsNeeded = Math.Max(2, 6 - orderColumns.Count);
-            orderColumns.AddRange(additionalOrderableColumns.Take(columnsNeeded));
+            var nonIdOrderable = allOrderableColumns
+                .Where(c => !idColumns.Any(id => id.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
             
-            orderColumns = orderColumns.Take(6).ToList();
+            int minColumns = 2;
+            int maxColumns = 6;
+            int currentCount = orderColumns.Count;
+            int columnsToAdd = Math.Max(minColumns - currentCount, 0);
+            columnsToAdd = Math.Max(columnsToAdd, Math.Min(maxColumns - currentCount, nonIdOrderable.Count));
+            
+            orderColumns.AddRange(nonIdOrderable.Take(columnsToAdd));
+            
+            orderColumns = orderColumns.Take(maxColumns).ToList();
             
             if (orderColumns.Count > 0)
             {
                 var orderByParts = orderColumns.Select(c => BuildOrderByExpression(c.Name, c.Type));
                 orderByClause = string.Join(", ", orderByParts);
                 
-                if (idColumns.Count > 0)
-                {
-                    Log.Debug("No primary key found - ordering by {IdCount} ID column(s) + {AdditionalCount} additional column(s): {OrderBy}", 
-                        idColumns.Count, orderColumns.Count - idColumns.Count, orderByClause);
-                }
-                else
-                {
-                    Log.Warning("No primary key or ID columns found - ordering by first {Count} orderable column(s): {OrderBy}", 
-                        orderColumns.Count, orderByClause);
-                }
+                Log.Information("No primary key found - ordering by {Count} column(s): {OrderBy}", 
+                    orderColumns.Count, orderByClause);
             }
             else if (metadata.Columns.Count > 0)
             {
@@ -581,6 +594,8 @@ public class DataExtractor
         }
 
         var sql = new System.Text.StringBuilder($"SELECT {columnList} FROM {tableReference} ORDER BY {orderByClause}");
+
+        Log.Information("Generated SQL for {Database}: {Sql}", _databaseType, sql.ToString());
 
         if (_maxRowsPerTable > 0)
         {
@@ -642,11 +657,11 @@ public class DataExtractor
     {
         if (_databaseType == DatabaseType.Oracle)
         {
-            return $"\"{identifier}\"";
+            return $"\"{identifier.ToUpperInvariant()}\"";
         }
         else if (_databaseType == DatabaseType.PostgreSQL)
         {
-            return $"\"{identifier}\"";
+            return $"\"{identifier.ToLowerInvariant()}\"";
         }
         return identifier;
     }
