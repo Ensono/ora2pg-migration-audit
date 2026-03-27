@@ -483,80 +483,87 @@ public class DataExtractor
     private string BuildSelectQuery(string tableReference, TableMetadata metadata)
     {
         string orderByClause;
+        int totalColumns = metadata.Columns.Count;
+        int targetOrderColumns = totalColumns switch
+        {
+            <= 4 => 2,
+            <= 6 => 3,
+            <= 10 => Math.Min(4, totalColumns / 2),
+            <= 15 => 5,
+            _ => 6
+        };
+        targetOrderColumns = Math.Max(2, targetOrderColumns); // Minimum 2 columns
+        
+        Log.Debug("Table has {TotalColumns} columns, targeting {TargetOrderColumns} order columns", 
+            totalColumns, targetOrderColumns);
+        
+        var idColumns = metadata.Columns
+            .Where(c => c.Name.Equals("id", StringComparison.OrdinalIgnoreCase) ||
+                       c.Name.EndsWith("_id", StringComparison.OrdinalIgnoreCase) ||
+                       c.Name.EndsWith("id", StringComparison.OrdinalIgnoreCase) ||
+                       c.Name.Contains("id", StringComparison.OrdinalIgnoreCase))
+            .Where(c => IsOrderableColumnType(c.Type))
+            .ToList();
+        
+        var nonIdOrderable = metadata.Columns
+            .Where(c => IsOrderableColumnType(c.Type))
+            .Where(c => !idColumns.Any(id => id.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        
+        Log.Debug("Found {IdCount} ID columns, {NonIdCount} non-ID orderable columns", 
+            idColumns.Count, nonIdOrderable.Count);
+        
+        var orderColumns = new List<TableMetadata.ColumnMetadata>();
+        
         if (metadata.PrimaryKeyColumns.Count > 0)
         {
-            var orderByParts = metadata.PrimaryKeyColumns.Select(pk =>
+            foreach (var pk in metadata.PrimaryKeyColumns)
             {
                 var col = metadata.Columns.FirstOrDefault(c => c.Name.Equals(pk, StringComparison.OrdinalIgnoreCase));
-                if (col == null)
+                if (col != null)
                 {
-                    Log.Warning("PK column {PkColumn} not found in metadata.Columns for ORDER BY", pk);
+                    orderColumns.Add(col);
                 }
-                return BuildOrderByExpression(pk, col?.Type ?? "UNKNOWN");
-            });
+            }
+            Log.Debug("Added {Count} PK columns to order list", orderColumns.Count);
+        }
+        
+        if (orderColumns.Count < targetOrderColumns)
+        {
+            var remainingIdColumns = idColumns
+                .Where(id => !orderColumns.Any(o => o.Name.Equals(id.Name, StringComparison.OrdinalIgnoreCase)))
+                .Take(targetOrderColumns - orderColumns.Count);
+            orderColumns.AddRange(remainingIdColumns);
+            Log.Debug("Added ID columns, now have {Count} order columns", orderColumns.Count);
+        }
+        
+        if (orderColumns.Count < targetOrderColumns)
+        {
+            var remainingNonId = nonIdOrderable
+                .Where(c => !orderColumns.Any(o => o.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase)))
+                .Take(targetOrderColumns - orderColumns.Count);
+            orderColumns.AddRange(remainingNonId);
+            Log.Debug("Added non-ID columns, now have {Count} order columns", orderColumns.Count);
+        }
+        
+        if (orderColumns.Count > 0)
+        {
+            var orderByParts = orderColumns.Select(c => BuildOrderByExpression(c.Name, c.Type));
             orderByClause = string.Join(", ", orderByParts);
-            Log.Information("Ordering by primary key columns: {OrderBy}", orderByClause);
+            
+            var pkInfo = metadata.PrimaryKeyColumns.Count > 0 ? "with PK" : "no PK";
+            Log.Information("Ordering by {Count} column(s) ({PkInfo}): {OrderBy}", 
+                orderColumns.Count, pkInfo, orderByClause);
+        }
+        else if (metadata.Columns.Count > 0)
+        {
+            orderByClause = BuildOrderByExpression(metadata.Columns[0].Name, metadata.Columns[0].Type);
+            Log.Warning("No orderable columns found - using first column as fallback: {OrderBy}", orderByClause);
         }
         else
         {
-            Log.Debug("Table has {Count} columns: {Columns}",
-                metadata.Columns.Count, 
-                string.Join(", ", metadata.Columns.Select(c => $"{c.Name}({c.Type})")));
-            
-            var idColumns = metadata.Columns
-                .Where(c => c.Name.Equals("id", StringComparison.OrdinalIgnoreCase) ||
-                           c.Name.EndsWith("_id", StringComparison.OrdinalIgnoreCase) ||
-                           c.Name.EndsWith("id", StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            
-            Log.Debug("Found {Count} ID columns: {Columns}", 
-                idColumns.Count, 
-                string.Join(", ", idColumns.Select(c => c.Name)));
-            
-            var allOrderableColumns = metadata.Columns
-                .Where(c => IsOrderableColumnType(c.Type))
-                .ToList();
-            
-            Log.Debug("Found {Count} total orderable columns: {Columns}", 
-                allOrderableColumns.Count, 
-                string.Join(", ", allOrderableColumns.Select(c => c.Name)));
-            
-            var orderColumns = new List<TableMetadata.ColumnMetadata>();
-            
-            orderColumns.AddRange(idColumns);
-            
-            var nonIdOrderable = allOrderableColumns
-                .Where(c => !idColumns.Any(id => id.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase)))
-                .ToList();
-            
-            int minColumns = 2;
-            int maxColumns = 6;
-            int currentCount = orderColumns.Count;
-            int columnsToAdd = Math.Max(minColumns - currentCount, 0);
-            columnsToAdd = Math.Max(columnsToAdd, Math.Min(maxColumns - currentCount, nonIdOrderable.Count));
-            
-            orderColumns.AddRange(nonIdOrderable.Take(columnsToAdd));
-            
-            orderColumns = orderColumns.Take(maxColumns).ToList();
-            
-            if (orderColumns.Count > 0)
-            {
-                var orderByParts = orderColumns.Select(c => BuildOrderByExpression(c.Name, c.Type));
-                orderByClause = string.Join(", ", orderByParts);
-                
-                Log.Information("No primary key found - ordering by {Count} column(s): {OrderBy}", 
-                    orderColumns.Count, orderByClause);
-            }
-            else if (metadata.Columns.Count > 0)
-            {
-                orderByClause = BuildOrderByExpression(metadata.Columns[0].Name, metadata.Columns[0].Type);
-                Log.Warning("No orderable columns found - using first column as fallback: {OrderBy}", orderByClause);
-            }
-            else
-            {
-                orderByClause = "1";
-                Log.Warning("No columns available for ordering table: {Table}", tableReference);
-            }
+            orderByClause = "1";
+            Log.Warning("No columns available for ordering table: {Table}", tableReference);
         }
 
         string columnList;
