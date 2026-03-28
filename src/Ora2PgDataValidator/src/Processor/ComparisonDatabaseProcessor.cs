@@ -320,19 +320,63 @@ public class ComparisonDatabaseProcessor
 
     private ComparisonResult ProcessObjectPair(string sourceObject, string targetObject, DatabaseObjectType objectType)
     {
+        const int maxRetries = 3;
+        ComparisonResult? result = null;
+        
+        for (int attempt = 0; attempt <= maxRetries; attempt++)
+        {
+            int extraOrderColumns = attempt * 2; // 0, 2, 4, 6 extra columns per retry
+            
+            if (attempt > 0)
+            {
+                Log.Information("  🔄 Retry {Attempt}/{MaxRetries}: Adding {ExtraColumns} extra ORDER BY columns for {Object}",
+                    attempt, maxRetries, extraOrderColumns, sourceObject);
+            }
+            
+            result = ProcessObjectPairWithOrderColumns(sourceObject, targetObject, objectType, extraOrderColumns);
+            
+            if (result.IsMatch)
+            {
+                if (attempt > 0)
+                {
+                    Log.Information("  ✓ Retry successful! Ordering issue resolved with {ExtraColumns} extra columns", extraOrderColumns);
+                }
+                return result;
+            }
+            
+            // Only retry if likely ordering issue
+            bool isLikelyOrderingIssue = result.SourceRowCount == result.TargetRowCount &&
+                                          result.MismatchedRows > 0 &&
+                                          result.MissingInTarget == 0 &&
+                                          result.ExtraInTarget == 0;
+            
+            if (!isLikelyOrderingIssue || attempt >= maxRetries)
+            {
+                break;
+            }
+            
+            Log.Debug("  Row counts match but hashes differ - likely ordering issue, will retry");
+        }
+
+        return result ?? new ComparisonResult(sourceObject, targetObject, objectType) { Error = "Unknown error" };
+    }
+
+    private ComparisonResult ProcessObjectPairWithOrderColumns(string sourceObject, string targetObject, 
+        DatabaseObjectType objectType, int extraOrderColumns)
+    {
         var result = new ComparisonResult(sourceObject, targetObject, objectType);
 
         try
         {
             Log.Information("  Extracting Oracle data from {Object}...", sourceObject);
-            var (oracleHashes, oracleRows, oracleMetadata) = ExtractAndHashTable(DatabaseType.Oracle, sourceObject);
+            var (oracleHashes, oracleRows, oracleMetadata) = ExtractAndHashTable(DatabaseType.Oracle, sourceObject, extraOrderColumns);
             result.SourceRowCount = oracleHashes.Count;
             Log.Information("  ✓ Oracle: {Count} rows extracted", oracleHashes.Count);
 
             _csvWriter.WriteTableHashes(sourceObject, "Oracle", oracleHashes);
 
             Log.Information("  Extracting PostgreSQL data from {Object}...", targetObject);
-            var (postgresHashes, postgresRows, postgresMetadata) = ExtractAndHashTable(DatabaseType.PostgreSQL, targetObject);
+            var (postgresHashes, postgresRows, postgresMetadata) = ExtractAndHashTable(DatabaseType.PostgreSQL, targetObject, extraOrderColumns);
             result.TargetRowCount = postgresHashes.Count;
             Log.Information("  ✓ PostgreSQL: {Count} rows extracted", postgresHashes.Count);
 
@@ -358,19 +402,67 @@ public class ComparisonDatabaseProcessor
 
     private ComparisonResult ProcessTablePair(string oracleTable, string postgresTable)
     {
+        const int maxRetries = 3;
+        ComparisonResult? result = null;
+        
+        for (int attempt = 0; attempt <= maxRetries; attempt++)
+        {
+            int extraOrderColumns = attempt * 2; // 0, 2, 4, 6 extra columns per retry
+            
+            if (attempt > 0)
+            {
+                Log.Information("  🔄 Retry {Attempt}/{MaxRetries}: Adding {ExtraColumns} extra ORDER BY columns for {Table}",
+                    attempt, maxRetries, extraOrderColumns, oracleTable);
+            }
+            
+            result = ProcessTablePairWithOrderColumns(oracleTable, postgresTable, extraOrderColumns);
+            
+            if (result.IsMatch)
+            {
+                if (attempt > 0)
+                {
+                    Log.Information("  ✓ Retry successful! Ordering issue resolved with {ExtraColumns} extra columns", extraOrderColumns);
+                }
+                return result;
+            }
+
+            bool isLikelyOrderingIssue = result.SourceRowCount == result.TargetRowCount &&
+                                          result.MismatchedRows > 0 &&
+                                          result.MissingInTarget == 0 &&
+                                          result.ExtraInTarget == 0;
+            
+            if (!isLikelyOrderingIssue || attempt >= maxRetries)
+            {
+                if (attempt > 0)
+                {
+                    Log.Warning("  ✗ Retry {Attempt} did not resolve the issue (mismatched: {Mismatched})", 
+                        attempt, result.MismatchedRows);
+                }
+                break;
+            }
+            
+            Log.Debug("  Row counts match ({Count}) but {Mismatched} rows have different hashes - likely ordering issue, will retry",
+                result.SourceRowCount, result.MismatchedRows);
+        }
+
+        return result ?? new ComparisonResult(oracleTable, postgresTable) { Error = "Unknown error" };
+    }
+
+    private ComparisonResult ProcessTablePairWithOrderColumns(string oracleTable, string postgresTable, int extraOrderColumns)
+    {
         var result = new ComparisonResult(oracleTable, postgresTable);
 
         try
         {
             Log.Information("  Extracting Oracle data from {Table}...", oracleTable);
-            var (oracleHashes, oracleRows, oracleMetadata) = ExtractAndHashTable(DatabaseType.Oracle, oracleTable);
+            var (oracleHashes, oracleRows, oracleMetadata) = ExtractAndHashTable(DatabaseType.Oracle, oracleTable, extraOrderColumns);
             result.SourceRowCount = oracleHashes.Count;
             Log.Information("  ✓ Oracle: {Count} rows extracted", oracleHashes.Count);
 
             _csvWriter.WriteTableHashes(oracleTable, "Oracle", oracleHashes);
 
             Log.Information("  Extracting PostgreSQL data from {Table}...", postgresTable);
-            var (postgresHashes, postgresRows, postgresMetadata) = ExtractAndHashTable(DatabaseType.PostgreSQL, postgresTable);
+            var (postgresHashes, postgresRows, postgresMetadata) = ExtractAndHashTable(DatabaseType.PostgreSQL, postgresTable, extraOrderColumns);
             result.TargetRowCount = postgresHashes.Count;
             Log.Information("  ✓ PostgreSQL: {Count} rows extracted", postgresHashes.Count);
 
@@ -396,7 +488,7 @@ public class ComparisonDatabaseProcessor
 
     private (Dictionary<string, string> hashes,
              Dictionary<string, Dictionary<string, object?>> rowData,
-             TableMetadata metadata) ExtractAndHashTable(DatabaseType dbType, string tableRef)
+             TableMetadata metadata) ExtractAndHashTable(DatabaseType dbType, string tableRef, int extraOrderColumns = 0)
     {
         var hashes = new Dictionary<string, string>();
         var rowData = new Dictionary<string, Dictionary<string, object?>>();
@@ -404,7 +496,7 @@ public class ComparisonDatabaseProcessor
         using var connection = _connectionManager.GetConnection(dbType);
         connection.Open();
 
-        var extractor = new DataExtractor(connection, dbType);
+        var extractor = new DataExtractor(connection, dbType, extraOrderColumns);
         var metadata = extractor.GetTableMetadata(tableRef);
 
         int rowNumber = 0;

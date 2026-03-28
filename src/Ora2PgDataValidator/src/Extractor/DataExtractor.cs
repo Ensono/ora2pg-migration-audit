@@ -15,6 +15,7 @@ public class DataExtractor
     private readonly HashSet<string> _columnsToSkip;
     private readonly bool _skipLobColumns;
     private readonly int _lobSizeLimit;
+    private readonly int _extraOrderColumns;  // Additional columns to add for retry logic
 
     private static readonly HashSet<string> LobColumnTypes = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -23,10 +24,11 @@ public class DataExtractor
         "SYSTEM.BYTE[]", "BYTE[]"                                      // .NET binary representations
     };
 
-    public DataExtractor(IDbConnection connection, DatabaseType databaseType)
+    public DataExtractor(IDbConnection connection, DatabaseType databaseType, int extraOrderColumns = 0)
     {
         _connection = connection;
         _databaseType = databaseType;
+        _extraOrderColumns = extraOrderColumns;
 
         var props = ApplicationProperties.Instance;
         _maxRowsPerTable = props.GetInt("MAX_ROWS_PER_TABLE",
@@ -464,7 +466,8 @@ public class DataExtractor
         var quotedName = QuoteIdentifier(columnName);
         var typeUpper = (columnType ?? "").ToUpperInvariant();
         
-        Log.Debug("BuildOrderByExpression: column={Column}, type={Type}", columnName, columnType);
+        Log.Debug("BuildOrderByExpression: column={Column}, type={Type}, dbType={DbType}", 
+            columnName, columnType, _databaseType);
         
         bool isStringType = typeUpper.Contains("CHAR") || typeUpper.Contains("TEXT") ||
                            typeUpper.Contains("STRING") || typeUpper.Contains("VARCHAR") ||
@@ -472,7 +475,18 @@ public class DataExtractor
         
         if (isStringType)
         {
-            return $"UPPER(TRIM({quotedName})) ASC NULLS FIRST";
+            // Use binary/ASCII collation for consistent sorting between Oracle and PostgreSQL
+            // This ensures special characters like underscore sort the same way
+            if (_databaseType == DatabaseType.Oracle)
+            {
+                // NLSSORT with BINARY ensures byte-by-byte comparison
+                return $"NLSSORT(UPPER(TRIM({quotedName})), 'NLS_SORT=BINARY') ASC NULLS FIRST";
+            }
+            else
+            {
+                // PostgreSQL: COLLATE "C" gives ASCII/binary sorting
+                return $"UPPER(TRIM({quotedName})) COLLATE \"C\" ASC NULLS FIRST";
+            }
         }
         else
         {
@@ -484,18 +498,42 @@ public class DataExtractor
     {
         string orderByClause;
         int totalColumns = metadata.Columns.Count;
-        int targetOrderColumns = totalColumns switch
+        
+        // Count orderable columns (exclude LOBs, etc.)
+        int totalOrderableColumns = metadata.Columns.Count(c => IsOrderableColumnType(c.Type));
+        
+        // Calculate target order columns based on table size
+        // Use more columns for better uniqueness - at least half the columns, up to 6
+        int baseTargetOrderColumns = totalOrderableColumns switch
         {
-            <= 4 => 2,
-            <= 6 => 3,
-            <= 10 => Math.Min(4, totalColumns / 2),
+            <= 3 => totalOrderableColumns,          // Use all columns for tiny tables
+            <= 6 => Math.Max(3, totalOrderableColumns - 1),  // 4-6 columns -> use 3-5
+            <= 10 => Math.Max(4, totalOrderableColumns / 2), // 7-10 columns -> use 4-5
             <= 15 => 5,
             _ => 6
         };
-        targetOrderColumns = Math.Max(2, targetOrderColumns); // Minimum 2 columns
         
-        Log.Debug("Table has {TotalColumns} columns, targeting {TargetOrderColumns} order columns", 
-            totalColumns, targetOrderColumns);
+        // Add extra columns for retry attempts, but cap at available orderable columns
+        int targetOrderColumns = baseTargetOrderColumns + _extraOrderColumns;
+        targetOrderColumns = Math.Min(targetOrderColumns, totalOrderableColumns); // Can't exceed orderable columns
+        targetOrderColumns = Math.Max(1, targetOrderColumns); // Minimum 1 column (for tables with only 1 orderable column)
+        
+        if (_extraOrderColumns > 0)
+        {
+            if (targetOrderColumns >= totalOrderableColumns)
+            {
+                Log.Information("Retry attempt: Using ALL {Total} orderable columns (max reached, requested +{Extra})", 
+                    totalOrderableColumns, _extraOrderColumns);
+            }
+            else
+            {
+                Log.Information("Retry attempt: Adding {ExtraColumns} extra ORDER BY columns (total target: {Target})", 
+                    _extraOrderColumns, targetOrderColumns);
+            }
+        }
+        
+        Log.Debug("Table has {TotalColumns} columns ({OrderableColumns} orderable), targeting {TargetOrderColumns} order columns", 
+            totalColumns, totalOrderableColumns, targetOrderColumns);
         
         var idColumns = metadata.Columns
             .Where(c => c.Name.Equals("id", StringComparison.OrdinalIgnoreCase) ||
