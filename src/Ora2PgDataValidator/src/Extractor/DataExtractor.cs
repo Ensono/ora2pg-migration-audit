@@ -19,9 +19,14 @@ public class DataExtractor
 
     private static readonly HashSet<string> LobColumnTypes = new(StringComparer.OrdinalIgnoreCase)
     {
-        "BLOB", "CLOB", "NCLOB", "BFILE", "LONG RAW", "RAW", "LONG",  // Oracle native types
-        "BYTEA", "OID", "TEXT",                                        // PostgreSQL native types
-        "SYSTEM.BYTE[]", "BYTE[]"                                      // .NET binary representations
+        "BLOB", "CLOB", "NCLOB", "BFILE",                              // Oracle LOB types
+        "LONG RAW", "RAW", "LONG",                                     // Oracle LONG types  
+        "XMLTYPE",                                                      // Oracle XML type (also LOB)
+        "BYTEA", "OID", "TEXT",                                        // PostgreSQL binary/text types
+        "SYSTEM.BYTE[]", "BYTE[]",                                     // .NET binary representations
+        "Oracle.ManagedDataAccess.Types.OracleClob",                   // Oracle ADO.NET CLOB type
+        "Oracle.ManagedDataAccess.Types.OracleBlob",                   // Oracle ADO.NET BLOB type
+        "Npgsql.NpgsqlTypes.NpgsqlDbType"                              // PostgreSQL type namespace
     };
 
     public DataExtractor(IDbConnection connection, DatabaseType databaseType, int extraOrderColumns = 0)
@@ -138,8 +143,8 @@ public class DataExtractor
                         : row["DataType"].ToString() ?? "";
                     bool isKey = row["IsKey"] != DBNull.Value && (bool)row["IsKey"];
                     
-                    Log.Debug("Column schema: {ColumnName} = {ColumnType} (native), {NetType} (.NET)", 
-                        columnName, columnType, row["DataType"]);
+                    Log.Debug("Column schema: {ColumnName} = {ColumnType} (native), {NetType} (.NET), IsLob={IsLob}", 
+                        columnName, columnType, row["DataType"], IsLobColumnType(columnType));
 
                     if (_columnsToSkip.Contains(columnName))
                     {
@@ -152,7 +157,7 @@ public class DataExtractor
                     if (_skipLobColumns && IsLobColumnType(columnType))
                     {
                         blobSkippedCount++;
-                        Log.Debug("Skipping LOB column: {ColumnName} ({ColumnType}) in table {TableReference}", 
+                        Log.Information("Skipping LOB column: {ColumnName} ({ColumnType}) in table {TableReference} (SKIP_LOB_COLUMNS=true)", 
                             columnName, columnType, tableReference);
                         continue;
                     }
@@ -247,8 +252,26 @@ public class DataExtractor
         {
             if (typeUpper.Contains(lobType, StringComparison.OrdinalIgnoreCase))
             {
+                Log.Debug("Column type '{ColumnType}' matched LOB pattern '{LobPattern}'", columnType, lobType);
                 return true;
             }
+        }
+        
+        Log.Debug("Column type '{ColumnType}' is NOT a LOB (checked {Count} patterns)", columnType, LobColumnTypes.Count);
+        return false;
+    }
+
+    private bool CouldBeLobColumn(string columnName, string columnType)
+    {
+        var nameUpper = columnName.ToUpperInvariant();
+        var typeUpper = columnType.ToUpperInvariant();
+        
+        if ((nameUpper.Contains("XML") || nameUpper.Contains("CLOB") || nameUpper.Contains("BLOB"))
+            && !typeUpper.Contains("VARCHAR") && !typeUpper.Contains("CHAR"))
+        {
+            Log.Debug("Column '{ColumnName}' ({ColumnType}) suspected as LOB based on name pattern", 
+                columnName, columnType);
+            return true;
         }
         
         return false;
@@ -271,6 +294,7 @@ public class DataExtractor
             "NCLOB",          // Oracle national character large object
             "BFILE",          // Oracle binary file
             "BYTEA",          // PostgreSQL binary data
+            "TEXT",           // PostgreSQL large text (can be huge like CLOB)
             "JSON",           // JSON data
             "JSONB",          // PostgreSQL binary JSON
             "XML",            // XML data
@@ -296,6 +320,91 @@ public class DataExtractor
         }
 
         return true;
+    }
+
+    private class ColumnStats
+    {
+        public string ColumnName { get; set; } = "";
+        public long DistinctCount { get; set; }
+        public long NullCount { get; set; }
+        public double Selectivity => DistinctCount > 0 ? (double)DistinctCount : 0;
+    }
+
+    private List<ColumnStats> GetColumnStatistics(string tableReference, List<TableMetadata.ColumnMetadata> columns)
+    {
+        var stats = new List<ColumnStats>();
+        
+        if (columns.Count == 0)
+        {
+            return stats;
+        }
+
+        try
+        {
+            // Only analyze orderable columns (excludes LOBs/CLOB/BLOB/TEXT which cause ORA-22835)
+            var orderableColumns = columns.Where(c => IsOrderableColumnType(c.Type)).ToList();
+            
+            if (orderableColumns.Count == 0)
+            {
+                return stats;
+            }
+
+            // Limit to first 10 columns to avoid query timeout
+            var columnsToAnalyze = orderableColumns.Take(10).ToList();
+            
+            Log.Debug("Gathering statistics for {Count} orderable columns (excluding LOBs)", columnsToAnalyze.Count);
+            
+            foreach (var col in columnsToAnalyze)
+            {
+                try
+                {
+                    var quotedCol = QuoteIdentifier(col.Name);
+                    var sql = _databaseType == DatabaseType.Oracle
+                        ? $"SELECT COUNT(DISTINCT {quotedCol}) as distinct_count, " +
+                          $"SUM(CASE WHEN {quotedCol} IS NULL THEN 1 ELSE 0 END) as null_count " +
+                          $"FROM {tableReference} WHERE ROWNUM <= 10000"
+                        : $"SELECT COUNT(DISTINCT {quotedCol}) as distinct_count, " +
+                          $"COUNT(*) FILTER (WHERE {quotedCol} IS NULL) as null_count " +
+                          $"FROM {tableReference} LIMIT 10000";
+
+                    using var cmd = _connection.CreateCommand();
+                    cmd.CommandText = sql;
+                    cmd.CommandTimeout = 30; // Short timeout for stats gathering
+                    
+                    using var reader = cmd.ExecuteReader();
+                    if (reader.Read())
+                    {
+                        stats.Add(new ColumnStats
+                        {
+                            ColumnName = col.Name,
+                            DistinctCount = Convert.ToInt64(reader["distinct_count"]),
+                            NullCount = Convert.ToInt64(reader["null_count"])
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug("Could not get stats for column {Column}: {Error}", col.Name, ex.Message);
+                    // If stats fail for a column, give it neutral stats
+                    stats.Add(new ColumnStats
+                    {
+                        ColumnName = col.Name,
+                        DistinctCount = 100,
+                        NullCount = 0
+                    });
+                }
+            }
+
+            Log.Debug("Column statistics for {Table}: {Stats}", 
+                tableReference,
+                string.Join(", ", stats.Select(s => $"{s.ColumnName}(distinct={s.DistinctCount}, nulls={s.NullCount})")));
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("Could not gather column statistics for {Table}: {Error}", tableReference, ex.Message);
+        }
+
+        return stats;
     }
 
 
@@ -433,10 +542,28 @@ public class DataExtractor
             var row = new object?[columnCount];
             for (int i = 0; i < columnCount; i++)
             {
-                row[i] = reader.GetValue(i);
-                if (row[i] == DBNull.Value)
+                try
                 {
-                    row[i] = null;
+                    row[i] = reader.GetValue(i);
+                    if (row[i] == DBNull.Value)
+                    {
+                        row[i] = null;
+                    }
+                }
+                catch (OverflowException)
+                {
+                    try
+                    {
+                        row[i] = reader.GetString(i);
+                        Log.Debug("Column {Index} ({Name}) value exceeds decimal range, retrieved as string", 
+                            i, reader.GetName(i));
+                    }
+                    catch
+                    {
+                        row[i] = null;
+                        Log.Warning("Column {Index} ({Name}) overflow and cannot be retrieved as string, setting to NULL", 
+                            i, reader.GetName(i));
+                    }
                 }
             }
             batch.Add(row);
@@ -469,9 +596,19 @@ public class DataExtractor
         Log.Debug("BuildOrderByExpression: column={Column}, type={Type}, dbType={DbType}", 
             columnName, columnType, _databaseType);
         
-        bool isStringType = typeUpper.Contains("CHAR") || typeUpper.Contains("TEXT") ||
-                           typeUpper.Contains("STRING") || typeUpper.Contains("VARCHAR") ||
-                           typeUpper.Contains("CLOB") || typeUpper.Contains("NCLOB");
+        bool isLobType = typeUpper.Contains("CLOB") || typeUpper.Contains("NCLOB") ||
+                         typeUpper.Contains("BLOB") || typeUpper.Contains("BYTEA") ||
+                         typeUpper.Contains("TEXT") && _databaseType == DatabaseType.PostgreSQL;
+        
+        if (isLobType)
+        {
+            Log.Warning("LOB column {Column} ({Type}) should not be used in ORDER BY - using constant instead", 
+                columnName, columnType);
+            return "1"; // Fallback to constant
+        }
+        
+        bool isStringType = typeUpper.Contains("CHAR") || typeUpper.Contains("STRING") || 
+                           typeUpper.Contains("VARCHAR");
         
         if (isStringType)
         {
@@ -535,24 +672,34 @@ public class DataExtractor
         Log.Debug("Table has {TotalColumns} columns ({OrderableColumns} orderable), targeting {TargetOrderColumns} order columns", 
             totalColumns, totalOrderableColumns, targetOrderColumns);
         
-        var idColumns = metadata.Columns
-            .Where(c => c.Name.Equals("id", StringComparison.OrdinalIgnoreCase) ||
-                       c.Name.EndsWith("_id", StringComparison.OrdinalIgnoreCase) ||
-                       c.Name.EndsWith("id", StringComparison.OrdinalIgnoreCase) ||
-                       c.Name.Contains("id", StringComparison.OrdinalIgnoreCase))
-            .Where(c => IsOrderableColumnType(c.Type))
-            .ToList();
+        // Get column statistics to choose best ORDER BY columns (high cardinality, low nulls)
+        var allOrderableColumns = metadata.Columns.Where(c => IsOrderableColumnType(c.Type)).ToList();
+        var columnStats = GetColumnStatistics(tableReference, allOrderableColumns);
         
-        var nonIdOrderable = metadata.Columns
-            .Where(c => IsOrderableColumnType(c.Type))
-            .Where(c => !idColumns.Any(id => id.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase)))
-            .ToList();
-        
-        Log.Debug("Found {IdCount} ID columns, {NonIdCount} non-ID orderable columns", 
-            idColumns.Count, nonIdOrderable.Count);
+        // Sort ALL orderable columns by their statistics (best first)
+        var columnsSortedByStats = allOrderableColumns;
+        if (columnStats.Count > 0)
+        {
+            columnsSortedByStats = allOrderableColumns
+                .OrderBy(c =>
+                {
+                    var stat = columnStats.FirstOrDefault(s => s.ColumnName.Equals(c.Name, StringComparison.OrdinalIgnoreCase));
+                    return stat?.NullCount ?? long.MaxValue; // Fewest nulls first
+                })
+                .ThenByDescending(c =>
+                {
+                    var stat = columnStats.FirstOrDefault(s => s.ColumnName.Equals(c.Name, StringComparison.OrdinalIgnoreCase));
+                    return stat?.DistinctCount ?? 0; // Most distinct values first
+                })
+                .ToList();
+            
+            Log.Debug("Sorted columns by statistics (best first): {Columns}", 
+                string.Join(", ", columnsSortedByStats.Take(5).Select(c => c.Name)));
+        }
         
         var orderColumns = new List<TableMetadata.ColumnMetadata>();
         
+        // Prioritize columns: PK columns first, then by statistics (best columns), then ID columns as fallback
         if (metadata.PrimaryKeyColumns.Count > 0)
         {
             foreach (var pk in metadata.PrimaryKeyColumns)
@@ -566,37 +713,59 @@ public class DataExtractor
             Log.Debug("Added {Count} PK columns to order list", orderColumns.Count);
         }
         
+        // Add remaining columns sorted by statistics (best columns first)
         if (orderColumns.Count < targetOrderColumns)
         {
-            var remainingIdColumns = idColumns
-                .Where(id => !orderColumns.Any(o => o.Name.Equals(id.Name, StringComparison.OrdinalIgnoreCase)))
-                .Take(targetOrderColumns - orderColumns.Count);
-            orderColumns.AddRange(remainingIdColumns);
-            Log.Debug("Added ID columns, now have {Count} order columns", orderColumns.Count);
-        }
-        
-        if (orderColumns.Count < targetOrderColumns)
-        {
-            var remainingNonId = nonIdOrderable
+            var remainingColumns = columnsSortedByStats
                 .Where(c => !orderColumns.Any(o => o.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase)))
                 .Take(targetOrderColumns - orderColumns.Count);
-            orderColumns.AddRange(remainingNonId);
-            Log.Debug("Added non-ID columns, now have {Count} order columns", orderColumns.Count);
+            orderColumns.AddRange(remainingColumns);
+            Log.Debug("Added best columns by statistics, now have {Count} order columns", orderColumns.Count);
         }
         
         if (orderColumns.Count > 0)
         {
-            var orderByParts = orderColumns.Select(c => BuildOrderByExpression(c.Name, c.Type));
-            orderByClause = string.Join(", ", orderByParts);
+            var safeOrderColumns = orderColumns
+                .Where(c => !IsLobColumnType(c.Type) && !CouldBeLobColumn(c.Name, c.Type))
+                .ToList();
             
-            var pkInfo = metadata.PrimaryKeyColumns.Count > 0 ? "with PK" : "no PK";
-            Log.Information("Ordering by {Count} column(s) ({PkInfo}): {OrderBy}", 
-                orderColumns.Count, pkInfo, orderByClause);
+            if (safeOrderColumns.Count < orderColumns.Count)
+            {
+                var excluded = orderColumns.Except(safeOrderColumns).Select(c => $"{c.Name} ({c.Type})");
+                Log.Warning("Excluded {Count} LOB column(s) from ORDER BY at final stage: {Columns}", 
+                    orderColumns.Count - safeOrderColumns.Count, string.Join(", ", excluded));
+            }
+            
+            if (safeOrderColumns.Count > 0)
+            {
+                var orderByParts = safeOrderColumns.Select(c => BuildOrderByExpression(c.Name, c.Type));
+                orderByClause = string.Join(", ", orderByParts);
+                
+                var pkInfo = metadata.PrimaryKeyColumns.Count > 0 ? "with PK" : "no PK";
+                Log.Information("Ordering by {Count} column(s) ({PkInfo}): {OrderBy}", 
+                    safeOrderColumns.Count, pkInfo, orderByClause);
+            }
+            else
+            {
+                orderByClause = "1";
+                Log.Warning("All order columns were LOBs - falling back to constant ORDER BY 1");
+            }
         }
         else if (metadata.Columns.Count > 0)
         {
-            orderByClause = BuildOrderByExpression(metadata.Columns[0].Name, metadata.Columns[0].Type);
-            Log.Warning("No orderable columns found - using first column as fallback: {OrderBy}", orderByClause);
+            var firstOrderableColumn = metadata.Columns.FirstOrDefault(c => IsOrderableColumnType(c.Type));
+            
+            if (firstOrderableColumn != null)
+            {
+                orderByClause = BuildOrderByExpression(firstOrderableColumn.Name, firstOrderableColumn.Type);
+                Log.Warning("No orderable columns found in normal flow - using first orderable column as fallback: {OrderBy}", 
+                    orderByClause);
+            }
+            else
+            {
+                orderByClause = "1";
+                Log.Warning("Table has no orderable columns (all are LOB/XML/etc) - using constant ORDER BY 1");
+            }
         }
         else
         {
@@ -605,19 +774,31 @@ public class DataExtractor
         }
 
         string columnList;
-        if (metadata.Columns.Count > 0)
+        
+        if (_skipLobColumns && metadata.Columns.Any(c => IsLobColumnType(c.Type)))
         {
+            var nonLobColumns = metadata.Columns
+                .Where(c => !IsLobColumnType(c.Type))
+                .Select(c => QuoteIdentifier(c.Name));
+            
+            columnList = string.Join(", ", nonLobColumns);
+            
+            var lobCount = metadata.Columns.Count(c => IsLobColumnType(c.Type));
+            Log.Information("Skipping {Count} LOB column(s) in SELECT (SKIP_LOB_COLUMNS=true)", lobCount);
+        }
+        else if (_lobSizeLimit > 0 && metadata.Columns.Any(c => IsLobColumnType(c.Type)))
+        {
+
             var columnExpressions = new List<string>();
             int lobLimitedCount = 0;
+            
             foreach (var col in metadata.Columns)
             {
-                if (_lobSizeLimit > 0 && IsLobColumnType(col.Type))
+                if (IsLobColumnType(col.Type))
                 {
                     var limitedCol = BuildLobLimitedColumn(col.Name, col.Type);
                     columnExpressions.Add(limitedCol);
                     lobLimitedCount++;
-                    Log.Debug("LOB column {Column} ({Type}) will be limited to {Limit} bytes: {Expr}", 
-                        col.Name, col.Type, _lobSizeLimit, limitedCol);
                 }
                 else
                 {
@@ -625,17 +806,19 @@ public class DataExtractor
                 }
             }
             
-            if (lobLimitedCount > 0)
-            {
-                Log.Information("Applied LOB size limit ({Limit} bytes) to {Count} column(s) in {Table}", 
-                    _lobSizeLimit, lobLimitedCount, tableReference);
-            }
-            
             columnList = string.Join(", ", columnExpressions);
+            Log.Information("Applied LOB size limit ({Limit} bytes) to {Count} column(s)", 
+                _lobSizeLimit, lobLimitedCount);
         }
         else
         {
             columnList = "*";
+            
+            if (metadata.Columns.Any(c => IsLobColumnType(c.Type)))
+            {
+                var lobCount = metadata.Columns.Count(c => IsLobColumnType(c.Type));
+                Log.Information("Using SELECT * with {Count} LOB column(s) - full LOB content will be fetched", lobCount);
+            }
         }
 
         var sql = new System.Text.StringBuilder($"SELECT {columnList} FROM {tableReference} ORDER BY {orderByClause}");
@@ -663,7 +846,7 @@ public class DataExtractor
         var quotedName = QuoteIdentifier(columnName);
         var typeUpper = columnType.ToUpperInvariant();
         
-        var effectiveLimit = Math.Min(_lobSizeLimit, 2000);
+        var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 2000) : 2000;
 
         if (_databaseType == DatabaseType.Oracle)
         {

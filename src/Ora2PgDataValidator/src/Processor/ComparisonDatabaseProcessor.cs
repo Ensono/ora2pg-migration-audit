@@ -335,6 +335,12 @@ public class ComparisonDatabaseProcessor
             
             result = ProcessObjectPairWithOrderColumns(sourceObject, targetObject, objectType, extraOrderColumns);
             
+            if (!string.IsNullOrEmpty(result.Error))
+            {
+                Log.Warning("  ✗ Error occurred, not retrying: {Error}", result.Error);
+                break;
+            }
+            
             if (result.IsMatch)
             {
                 if (attempt > 0)
@@ -416,6 +422,12 @@ public class ComparisonDatabaseProcessor
             }
             
             result = ProcessTablePairWithOrderColumns(oracleTable, postgresTable, extraOrderColumns);
+            
+            if (!string.IsNullOrEmpty(result.Error))
+            {
+                Log.Warning("  ✗ Error occurred, not retrying: {Error}", result.Error);
+                break;
+            }
             
             if (result.IsMatch)
             {
