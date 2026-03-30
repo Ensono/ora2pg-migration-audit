@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Xml;
+using System.Xml.Linq;
 using Ora2Pg.Common.Config;
 
 namespace Ora2PgDataValidator.Hasher;
@@ -118,6 +120,15 @@ public static class HashGenerator
                 return strVal.ToLowerInvariant();
             }
             
+            if (strVal.TrimStart().StartsWith("<"))
+            {
+                var normalized = TryNormalizeXml(strVal);
+                if (normalized != null)
+                {
+                    return normalized; // Use normalized XML for consistent hashing
+                }
+            }
+            
             return strVal.TrimEnd(); // Only trim trailing whitespace (Oracle CHAR padding)
         }
 
@@ -145,6 +156,75 @@ public static class HashGenerator
         }
         
         return hasHyphen || value.Length == 32;
+    }
+
+
+    private static string? TryNormalizeXml(string xmlContent)
+    {
+        try
+        {
+            var doc = XDocument.Parse(xmlContent, LoadOptions.PreserveWhitespace);
+            
+            NormalizeXmlElement(doc.Root);
+            
+            var result = doc.ToString(SaveOptions.DisableFormatting);
+            
+            result = System.Text.RegularExpressions.Regex.Replace(result, @">\s+<", "><");
+            
+            return result;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void NormalizeXmlElement(XElement? element)
+    {
+        if (element == null) return;
+        
+        var sortedAttrs = element.Attributes()
+            .Where(a => !a.IsNamespaceDeclaration)
+            .OrderBy(a => a.Name.NamespaceName)
+            .ThenBy(a => a.Name.LocalName)
+            .ToList();
+        
+        var namespaceAttrs = element.Attributes()
+            .Where(a => a.IsNamespaceDeclaration)
+            .OrderBy(a => a.Name.LocalName)
+            .ToList();
+        
+        element.RemoveAttributes();
+        
+        foreach (var ns in namespaceAttrs)
+        {
+            element.Add(ns);
+        }
+        
+        foreach (var attr in sortedAttrs)
+        {
+            attr.Value = attr.Value.Trim();
+            element.Add(attr);
+        }
+        
+        var textNodes = element.Nodes().OfType<XText>().ToList();
+        foreach (var textNode in textNodes)
+        {
+            if (string.IsNullOrWhiteSpace(textNode.Value))
+            {
+                textNode.Remove();
+            }
+        }
+        
+        foreach (var child in element.Elements())
+        {
+            NormalizeXmlElement(child);
+        }
+        
+        if (!element.HasElements && !string.IsNullOrWhiteSpace(element.Value))
+        {
+            element.Value = element.Value.Trim();
+        }
     }
     
     public static string GenerateHash(string input, string algorithm = "SHA256")
