@@ -467,7 +467,8 @@ public class DataTypeValidator
 
         if (oracleType == "NVARCHAR2")
         {
-            if (!postgresType.StartsWith("character varying") && postgresType != "varchar" && postgresType != "text")
+            var baseType = ExtractBaseType(postgresType);
+            if (!baseType.StartsWith("character varying") && baseType != "varchar" && baseType != "text")
             {
                 AddIssue(oracle, postgres, ValidationSeverity.Error, "National String Type",
                     "Oracle NVARCHAR2 should map to VARCHAR or TEXT in PostgreSQL.",
