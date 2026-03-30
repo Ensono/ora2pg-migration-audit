@@ -163,7 +163,9 @@ public static class HashGenerator
     {
         try
         {
-            var doc = XDocument.Parse(xmlContent, LoadOptions.PreserveWhitespace);
+            var decoded = System.Net.WebUtility.HtmlDecode(xmlContent);
+            
+            var doc = XDocument.Parse(decoded, LoadOptions.PreserveWhitespace);
             
             NormalizeXmlElement(doc.Root);
             
@@ -214,6 +216,22 @@ public static class HashGenerator
             {
                 textNode.Remove();
             }
+        }
+        
+        var childElements = element.Elements().ToList();
+        foreach (var child in childElements)
+        {
+            child.Remove();
+        }
+        
+        var sortedChildren = childElements
+            .OrderBy(e => e.Name.NamespaceName)
+            .ThenBy(e => e.Name.LocalName)
+            .ToList();
+        
+        foreach (var child in sortedChildren)
+        {
+            element.Add(child);
         }
         
         foreach (var child in element.Elements())

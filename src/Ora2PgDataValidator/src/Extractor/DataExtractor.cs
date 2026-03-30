@@ -154,7 +154,7 @@ public class DataExtractor
                     }
                     
                     // Skip LOB columns if SKIP_LOB_COLUMNS is enabled
-                    if (_skipLobColumns && IsLobColumnType(columnType))
+                    if (_skipLobColumns && (IsLobColumnType(columnType) || CouldBeLobColumn(columnName, columnType)))
                     {
                         blobSkippedCount++;
                         Log.Information("Skipping LOB column: {ColumnName} ({ColumnType}) in table {TableReference} (SKIP_LOB_COLUMNS=true)", 
@@ -588,13 +588,13 @@ public class DataExtractor
         }
     }
 
-    private string BuildOrderByExpression(string columnName, string columnType)
+    private string BuildOrderByExpression(string columnName, string columnType, bool useAggressiveNormalization = false)
     {
         var quotedName = QuoteIdentifier(columnName);
         var typeUpper = (columnType ?? "").ToUpperInvariant();
         
-        Log.Debug("BuildOrderByExpression: column={Column}, type={Type}, dbType={DbType}", 
-            columnName, columnType, _databaseType);
+        Log.Debug("BuildOrderByExpression: column={Column}, type={Type}, dbType={DbType}, aggressive={Aggressive}", 
+            columnName, columnType, _databaseType, useAggressiveNormalization);
         
         bool isLobType = typeUpper.Contains("CLOB") || typeUpper.Contains("NCLOB") ||
                          typeUpper.Contains("BLOB") || typeUpper.Contains("BYTEA") ||
@@ -612,17 +612,31 @@ public class DataExtractor
         
         if (isStringType)
         {
-            // Use binary/ASCII collation for consistent sorting between Oracle and PostgreSQL
-            // This ensures special characters like underscore sort the same way
             if (_databaseType == DatabaseType.Oracle)
             {
-                // NLSSORT with BINARY ensures byte-by-byte comparison
-                return $"NLSSORT(UPPER(TRIM({quotedName})), 'NLS_SORT=BINARY') ASC NULLS FIRST";
+                if (useAggressiveNormalization)
+                {
+                    // RETRY: Use UPPER/TRIM with binary collation (slower but more reliable)
+                    return $"NLSSORT(UPPER(TRIM({quotedName})), 'NLS_SORT=BINARY') ASC NULLS FIRST";
+                }
+                else
+                {
+                    // FIRST ATTEMPT: Simple binary sort (faster)
+                    return $"NLSSORT({quotedName}, 'NLS_SORT=BINARY') ASC NULLS FIRST";
+                }
             }
             else
             {
-                // PostgreSQL: COLLATE "C" gives ASCII/binary sorting
-                return $"UPPER(TRIM({quotedName})) COLLATE \"C\" ASC NULLS FIRST";
+                if (useAggressiveNormalization)
+                {
+                    // RETRY: Use UPPER/TRIM with C collation (slower but more reliable)
+                    return $"UPPER(TRIM({quotedName})) COLLATE \"C\" ASC NULLS FIRST";
+                }
+                else
+                {
+                    // FIRST ATTEMPT: Simple C collation (faster)
+                    return $"{quotedName} COLLATE \"C\" ASC NULLS FIRST";
+                }
             }
         }
         else
@@ -738,12 +752,16 @@ public class DataExtractor
             
             if (safeOrderColumns.Count > 0)
             {
-                var orderByParts = safeOrderColumns.Select(c => BuildOrderByExpression(c.Name, c.Type));
+                // Use normalization (UPPER/TRIM) only on retries for better performance
+                bool useAggressiveNormalization = _extraOrderColumns > 0;
+                
+                var orderByParts = safeOrderColumns.Select(c => BuildOrderByExpression(c.Name, c.Type, useAggressiveNormalization));
                 orderByClause = string.Join(", ", orderByParts);
                 
                 var pkInfo = metadata.PrimaryKeyColumns.Count > 0 ? "with PK" : "no PK";
-                Log.Information("Ordering by {Count} column(s) ({PkInfo}): {OrderBy}", 
-                    safeOrderColumns.Count, pkInfo, orderByClause);
+                var strategy = useAggressiveNormalization ? "aggressive (UPPER/TRIM)" : "simple (fast)";
+                Log.Information("Ordering by {Count} column(s) ({PkInfo}, {Strategy}): {OrderBy}", 
+                    safeOrderColumns.Count, pkInfo, strategy, orderByClause);
             }
             else
             {
@@ -757,7 +775,8 @@ public class DataExtractor
             
             if (firstOrderableColumn != null)
             {
-                orderByClause = BuildOrderByExpression(firstOrderableColumn.Name, firstOrderableColumn.Type);
+                bool useAggressiveNormalization = _extraOrderColumns > 0;
+                orderByClause = BuildOrderByExpression(firstOrderableColumn.Name, firstOrderableColumn.Type, useAggressiveNormalization);
                 Log.Warning("No orderable columns found in normal flow - using first orderable column as fallback: {OrderBy}", 
                     orderByClause);
             }
