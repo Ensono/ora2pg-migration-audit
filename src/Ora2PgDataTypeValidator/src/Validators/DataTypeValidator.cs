@@ -62,9 +62,20 @@ public class DataTypeValidator
         }
         else if (isCompatible)
         {
+            string? lengthNote = null;
+            if ((oracleType.Contains("VARCHAR") || oracleType.Contains("CHAR")) && 
+                oracle.CharLength.HasValue && postgres.CharLength.HasValue &&
+                postgres.CharLength > oracle.CharLength)
+            {
+                var expansion = ((double)(postgres.CharLength.Value - oracle.CharLength.Value) / oracle.CharLength.Value * 100);
+                lengthNote = $"Note: Column length expanded from {oracle.CharLength} to {postgres.CharLength} " +
+                            $"({expansion:F0}% increase). DMS applies this safety buffer to accommodate UTF-8 multi-byte " +
+                            "characters when converting from Oracle's byte-based semantics to PostgreSQL's character-based storage.";
+            }
+            
             AddIssue(oracle, postgres, ValidationSeverity.Info, "Valid Mapping",
                 $"{expectedMapping.MappingDescription} ✓",
-                null);
+                lengthNote);
         }
 
         ValidateNumericTypes(oracle, postgres, oracleType, postgresType);

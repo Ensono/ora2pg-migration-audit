@@ -594,13 +594,20 @@ public class PostgresSchemaExtractor
                 continue;
             }
 
+            var checkClause = reader.GetString(2);
+            
+            if (checkClause.Contains("IS NOT NULL"))
+            {
+                continue;
+            }
+
             checks.Add(new ConstraintDefinition
             {
                 ConstraintName = reader.GetString(0),
                 SchemaName = schemaName.ToLower(),
                 TableName = tableName,
                 Type = ConstraintType.Check,
-                CheckCondition = reader.GetString(2)
+                CheckCondition = checkClause
             });
         }
         

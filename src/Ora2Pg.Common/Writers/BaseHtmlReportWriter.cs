@@ -31,7 +31,7 @@ public abstract class BaseHtmlReportWriter
         .match { color: #28a745; }
         .mismatch { color: #dc3545; font-weight: bold; }
         .warning { color: #856404; }
-        .info { color: #17a2b8; }
+        .info { color: #333; }
         .number { text-align: right; font-family: 'Courier New', monospace; }
         .pk-list { margin: 5px 0; padding: 10px; background-color: #fff3cd; border-left: 4px solid #ffc107; }
         .pk-list ul { margin: 5px 0; padding-left: 20px; }

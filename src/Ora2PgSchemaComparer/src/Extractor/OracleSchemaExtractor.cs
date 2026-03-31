@@ -413,12 +413,12 @@ public class OracleSchemaExtractor
         connection.Open();
         
         var query = $@"
-            SELECT c.constraint_name, c.table_name, 
+            SELECT c.constraint_name, c.table_name, c.status,
                    LISTAGG(cc.column_name, ',') WITHIN GROUP (ORDER BY cc.position) as columns
             FROM all_constraints c
             JOIN all_cons_columns cc ON c.owner = cc.owner AND c.constraint_name = cc.constraint_name
             WHERE c.owner = '{schemaName.ToUpper()}' AND c.constraint_type = 'P'
-            GROUP BY c.constraint_name, c.table_name
+            GROUP BY c.constraint_name, c.table_name, c.status
             ORDER BY c.table_name";
         
         using var cmd = new OracleCommand(query, (OracleConnection)connection);
@@ -438,7 +438,8 @@ public class OracleSchemaExtractor
                 SchemaName = schemaName.ToUpper(),
                 TableName = tableName,
                 Type = ConstraintType.PrimaryKey,
-                Columns = reader.GetString(2).Split(',').ToList()
+                Columns = reader.GetString(3).Split(',').ToList(),
+                IsEnabled = reader.GetString(2) == "ENABLED"
             });
         }
         
@@ -456,7 +457,7 @@ public class OracleSchemaExtractor
         
         var query = $@"
             SELECT c.constraint_name, c.table_name, c.r_owner, rc.table_name as ref_table,
-                   c.delete_rule, c.deferrable, c.deferred,
+                   c.delete_rule, c.deferrable, c.deferred, c.status,
                    LISTAGG(cc.column_name, ',') WITHIN GROUP (ORDER BY cc.position) as columns,
                    LISTAGG(rcc.column_name, ',') WITHIN GROUP (ORDER BY rcc.position) as ref_columns
             FROM all_constraints c
@@ -464,7 +465,7 @@ public class OracleSchemaExtractor
             JOIN all_constraints rc ON c.r_owner = rc.owner AND c.r_constraint_name = rc.constraint_name
             JOIN all_cons_columns rcc ON rc.owner = rcc.owner AND rc.constraint_name = rcc.constraint_name
             WHERE c.owner = '{schemaName.ToUpper()}' AND c.constraint_type = 'R'
-            GROUP BY c.constraint_name, c.table_name, c.r_owner, rc.table_name, c.delete_rule, c.deferrable, c.deferred
+            GROUP BY c.constraint_name, c.table_name, c.r_owner, rc.table_name, c.delete_rule, c.deferrable, c.deferred, c.status
             ORDER BY c.table_name";
         
         using var cmd = new OracleCommand(query, (OracleConnection)connection);
@@ -508,8 +509,9 @@ public class OracleSchemaExtractor
                 OnUpdateRule = "NO ACTION", // Oracle doesn't have ON UPDATE
                 IsDeferrable = reader.GetString(5) == "DEFERRABLE",
                 IsInitiallyDeferred = reader.GetString(6) == "DEFERRED",
-                Columns = reader.GetString(7).Split(',').ToList(),
-                ReferencedColumns = reader.GetString(8).Split(',').ToList()
+                IsEnabled = reader.GetString(7) == "ENABLED",
+                Columns = reader.GetString(8).Split(',').ToList(),
+                ReferencedColumns = reader.GetString(9).Split(',').ToList()
             });
         }
         
@@ -538,12 +540,12 @@ public class OracleSchemaExtractor
         connection.Open();
         
         var query = $@"
-            SELECT c.constraint_name, c.table_name,
+            SELECT c.constraint_name, c.table_name, c.status,
                    LISTAGG(cc.column_name, ',') WITHIN GROUP (ORDER BY cc.position) as columns
             FROM all_constraints c
             JOIN all_cons_columns cc ON c.owner = cc.owner AND c.constraint_name = cc.constraint_name
             WHERE c.owner = '{schemaName.ToUpper()}' AND c.constraint_type = 'U'
-            GROUP BY c.constraint_name, c.table_name
+            GROUP BY c.constraint_name, c.table_name, c.status
             ORDER BY c.table_name";
         
         using var cmd = new OracleCommand(query, (OracleConnection)connection);
@@ -563,7 +565,8 @@ public class OracleSchemaExtractor
                 SchemaName = schemaName.ToUpper(),
                 TableName = tableName,
                 Type = ConstraintType.Unique,
-                Columns = reader.GetString(2).Split(',').ToList()
+                Columns = reader.GetString(3).Split(',').ToList(),
+                IsEnabled = reader.GetString(2) == "ENABLED"
             });
         }
         
@@ -578,7 +581,7 @@ public class OracleSchemaExtractor
         connection.Open();
         
         var query = $@"
-            SELECT constraint_name, table_name, search_condition
+            SELECT constraint_name, table_name, search_condition, status
             FROM all_constraints
             WHERE owner = '{schemaName.ToUpper()}' AND constraint_type = 'C'
             AND constraint_name NOT LIKE 'SYS_%'
@@ -606,7 +609,8 @@ public class OracleSchemaExtractor
                 SchemaName = schemaName.ToUpper(),
                 TableName = tableName,
                 Type = ConstraintType.Check,
-                CheckCondition = condition
+                CheckCondition = condition,
+                IsEnabled = reader.GetString(3) == "ENABLED"
             });
         }
         
