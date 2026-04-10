@@ -262,19 +262,19 @@ Processing tables with LOB columns (BLOB, CLOB) can be slow. Use these options t
 # Applies to: BLOB, CLOB, NCLOB (Oracle) and bytea, text (PostgreSQL)
 SKIP_LOB_COLUMNS=false
 
-# Limit bytes fetched from LOB columns at DATABASE LEVEL (0 = unlimited)
-# Uses DBMS_LOB.SUBSTR (Oracle) or substring (PostgreSQL) in SQL query
-# This provides REAL performance improvement by reducing network transfer
+# Limit bytes fetched from LOB columns at DATABASE LEVEL
+# LOB columns are ALWAYS fetched via DBMS_LOB.SUBSTR (never SELECT *) to
+# avoid ORA-22835 (buffer overflow when CLOB > 4000 bytes).
 #
-# IMPORTANT: Maximum value is 2000 bytes.
-# Oracle DBMS_LOB.SUBSTR returns RAW type (for BLOB), limited to 2000 bytes.
-# The same limit is applied to CLOB for consistent hash comparison.
-# Setting a value > 2000 will cause the validator to fail with an error.
+# Oracle type limits (enforced automatically):
+#   BLOB -> RAW:      max 2000 bytes in SQL context
+#   CLOB -> VARCHAR2: max 4000 bytes in SQL context
 #
 # Examples:
-#   0     = Fetch entire LOB (slowest, most accurate)
-#   1024  = Fetch first 1KB only (very fast)
-#   2000  = Maximum allowed (Oracle limit)
+#   0     = Use default safe limits (BLOB: 2000, CLOB: 4000) - recommended
+#   1024  = Fetch first 1KB only (faster, less accurate)
+#   4000  = Maximum allowed (Oracle VARCHAR2 limit for CLOB)
+#           Note: BLOB is still capped at 2000 even if you set 4000
 LOB_SIZE_LIMIT=0
 ```
 
@@ -284,10 +284,10 @@ LOB_SIZE_LIMIT=0
 |---------------|-------|--------------|
 | `SKIP_LOB_COLUMNS=true` | ⚡ Fastest | LOBs excluded from SELECT query |
 | `LOB_SIZE_LIMIT=1024` | 🚀 Very Fast | Only 1KB transferred per LOB |
-| `LOB_SIZE_LIMIT=2000` | 🏃 Fast | Max 2KB (Oracle limit) |
-| Default (0) | � Slow | Full BLOB transferred |
+| `LOB_SIZE_LIMIT=2000` | 🏃 Fast | 2KB (max for BLOB columns) |
+| Default (0) | 🐢 Safe default | BLOB: 2000 bytes, CLOB: 4000 bytes |
 
-> **Note:** Oracle BLOB columns are limited to 2000 bytes max due to SQL RAW type constraints. CLOB columns are limited to 4000 bytes. PostgreSQL bytea columns have no such limit.
+> **⚠️ Important:** LOB columns always use `DBMS_LOB.SUBSTR` — never `SELECT *` — to avoid `ORA-22835` on CLOBs larger than 4000 bytes. Setting `LOB_SIZE_LIMIT > 4000` will cause the validator to fail immediately.
 
 #### Query Timeout Settings
 

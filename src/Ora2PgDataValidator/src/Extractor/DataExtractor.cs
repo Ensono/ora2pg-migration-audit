@@ -52,17 +52,18 @@ public class DataExtractor
         
         _lobSizeLimit = props.GetInt("LOB_SIZE_LIMIT", props.GetInt("BLOB_SIZE_LIMIT", 0));
         
-        const int MaxLobLimit = 2000;
+        // BLOB -> RAW: max 2000 bytes in Oracle SQL; CLOB -> VARCHAR2: max 4000 bytes
+        // Validate against the higher CLOB limit; BLOB will be further capped to 2000 internally
+        const int MaxLobLimit = 4000;
         if (_lobSizeLimit > MaxLobLimit)
         {
             Log.Error("LOB_SIZE_LIMIT={Limit} exceeds maximum of {Max} bytes. " +
-                     "Oracle DBMS_LOB.SUBSTR returns RAW (for BLOB) or VARCHAR2 (for CLOB), " +
-                     "limited to {Max} bytes in SQL context for consistent hashing. " +
+                     "Oracle DBMS_LOB.SUBSTR returns VARCHAR2 (for CLOB, max {Max} bytes) or RAW (for BLOB, max 2000 bytes) in SQL context. " +
                      "Please set LOB_SIZE_LIMIT to {Max} or less, or use SKIP_LOB_COLUMNS=true.",
                      _lobSizeLimit, MaxLobLimit, MaxLobLimit);
             throw new InvalidOperationException(
                 $"LOB_SIZE_LIMIT={_lobSizeLimit} exceeds maximum of {MaxLobLimit} bytes. " +
-                $"Set LOB_SIZE_LIMIT to {MaxLobLimit} or less, or use SKIP_LOB_COLUMNS=true.");
+                $"Set LOB_SIZE_LIMIT to {MaxLobLimit} or less (BLOB columns are capped at 2000), or use SKIP_LOB_COLUMNS=true.");
         }
         
         if (_lobSizeLimit > 0 && !_skipLobColumns)
@@ -805,9 +806,11 @@ public class DataExtractor
             var lobCount = metadata.Columns.Count(c => IsLobColumnType(c.Type));
             Log.Information("Skipping {Count} LOB column(s) in SELECT (SKIP_LOB_COLUMNS=true)", lobCount);
         }
-        else if (_lobSizeLimit > 0 && metadata.Columns.Any(c => IsLobColumnType(c.Type)))
+        else if (metadata.Columns.Any(c => IsLobColumnType(c.Type)))
         {
-
+            // Always build explicit column list when LOB columns exist.
+            // Never use SELECT * with LOBs: Oracle ADO.NET implicitly converts CLOB to string
+            // which fails with ORA-22835 when CLOB > 4000 bytes.
             var columnExpressions = new List<string>();
             int lobLimitedCount = 0;
             
@@ -826,18 +829,21 @@ public class DataExtractor
             }
             
             columnList = string.Join(", ", columnExpressions);
-            Log.Information("Applied LOB size limit ({Limit} bytes) to {Count} column(s)", 
-                _lobSizeLimit, lobLimitedCount);
+            
+            if (_lobSizeLimit > 0)
+            {
+                Log.Information("Applied LOB size limit ({Limit} bytes) to {Count} column(s)", 
+                    _lobSizeLimit, lobLimitedCount);
+            }
+            else
+            {
+                Log.Information("Applied default LOB limit (2000 bytes) to {Count} LOB column(s) to avoid ORA-22835", 
+                    lobLimitedCount);
+            }
         }
         else
         {
             columnList = "*";
-            
-            if (metadata.Columns.Any(c => IsLobColumnType(c.Type)))
-            {
-                var lobCount = metadata.Columns.Count(c => IsLobColumnType(c.Type));
-                Log.Information("Using SELECT * with {Count} LOB column(s) - full LOB content will be fetched", lobCount);
-            }
         }
 
         var sql = new System.Text.StringBuilder($"SELECT {columnList} FROM {tableReference} ORDER BY {orderByClause}");
@@ -864,22 +870,26 @@ public class DataExtractor
     {
         var quotedName = QuoteIdentifier(columnName);
         var typeUpper = columnType.ToUpperInvariant();
-        
-        var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 2000) : 2000;
 
         if (_databaseType == DatabaseType.Oracle)
         {
             if (typeUpper.Contains("BYTE[]") || typeUpper.Contains("BYTE") ||
                 typeUpper.Contains("BLOB"))
             {
+                // BLOB -> RAW: Oracle RAW limit is 2000 bytes in SQL context
+                var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 2000) : 2000;
                 return $"DBMS_LOB.SUBSTR({quotedName}, {effectiveLimit}, 1) AS {quotedName}";
             }
             else if (typeUpper.Contains("CLOB") || typeUpper.Contains("NCLOB"))
             {
+                // CLOB -> VARCHAR2: Oracle VARCHAR2 limit is 4000 bytes in SQL context
+                // DBMS_LOB.SUBSTR handles NULL safely (returns NULL for NULL input)
+                var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 4000) : 4000;
                 return $"DBMS_LOB.SUBSTR({quotedName}, {effectiveLimit}, 1) AS {quotedName}";
             }
             else if (typeUpper.Contains("RAW"))
             {
+                var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 2000) : 2000;
                 return $"SUBSTR({quotedName}, 1, {effectiveLimit}) AS {quotedName}";
             }
         }
@@ -887,10 +897,14 @@ public class DataExtractor
         {
             if (typeUpper.Contains("BYTEA") || typeUpper.Contains("BYTE[]") || typeUpper.Contains("BYTE"))
             {
+                // Match Oracle BLOB limit so hashes are comparable
+                var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 2000) : 2000;
                 return $"substring({quotedName} from 1 for {effectiveLimit}) AS {quotedName}";
             }
             else if (typeUpper.Contains("TEXT"))
             {
+                // Match Oracle CLOB limit so hashes are comparable
+                var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 4000) : 4000;
                 return $"substring({quotedName} from 1 for {effectiveLimit}) AS {quotedName}";
             }
         }
