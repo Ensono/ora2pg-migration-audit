@@ -872,13 +872,11 @@ public class DataExtractor
             if (typeUpper.Contains("BYTE[]") || typeUpper.Contains("BYTE") ||
                 typeUpper.Contains("BLOB"))
             {
-                return $"CASE WHEN {quotedName} IS NOT NULL AND DBMS_LOB.GETLENGTH({quotedName}) > 0 " +
-                       $"THEN DBMS_LOB.SUBSTR({quotedName}, {effectiveLimit}, 1) ELSE NULL END AS {quotedName}";
+                return $"DBMS_LOB.SUBSTR({quotedName}, {effectiveLimit}, 1) AS {quotedName}";
             }
             else if (typeUpper.Contains("CLOB") || typeUpper.Contains("NCLOB"))
             {
-                return $"CASE WHEN {quotedName} IS NOT NULL AND DBMS_LOB.GETLENGTH({quotedName}) > 0 " +
-                       $"THEN TO_CHAR(DBMS_LOB.SUBSTR({quotedName}, {effectiveLimit}, 1)) ELSE NULL END AS {quotedName}";
+                return $"DBMS_LOB.SUBSTR({quotedName}, {effectiveLimit}, 1) AS {quotedName}";
             }
             else if (typeUpper.Contains("RAW"))
             {
