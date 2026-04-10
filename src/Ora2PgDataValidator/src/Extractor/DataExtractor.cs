@@ -19,7 +19,7 @@ public class DataExtractor
 
     private static readonly HashSet<string> LobColumnTypes = new(StringComparer.OrdinalIgnoreCase)
     {
-        "BLOB", "CLOB", "NCLOB", "BFILE",                              // Oracle LOB types
+        "BLOB", "CLOB", "NCLOB", "BFILE",                              // Oracle LOB types (exact)
         "LONG RAW", "RAW", "LONG",                                     // Oracle LONG types  
         "XMLTYPE",                                                      // Oracle XML type (also LOB)
         "BYTEA", "OID", "TEXT",                                        // PostgreSQL binary/text types
@@ -27,6 +27,11 @@ public class DataExtractor
         "Oracle.ManagedDataAccess.Types.OracleClob",                   // Oracle ADO.NET CLOB type
         "Oracle.ManagedDataAccess.Types.OracleBlob",                   // Oracle ADO.NET BLOB type
         "Npgsql.NpgsqlTypes.NpgsqlDbType"                              // PostgreSQL type namespace
+    };
+
+    private static readonly string[] LobTypePatterns =
+    {
+        "CLOB", "BLOB", "BFILE", "XMLTYPE", "BYTEA", "LONG RAW", "BYTE[]", "OracleClob", "OracleBlob"
     };
 
     public DataExtractor(IDbConnection connection, DatabaseType databaseType, int extraOrderColumns = 0)
@@ -139,13 +144,18 @@ public class DataExtractor
                 foreach (DataRow row in schemaTable.Rows)
                 {
                     string columnName = row["ColumnName"].ToString() ?? "";
-                    string columnType = schemaTable.Columns.Contains("DataTypeName") && row["DataTypeName"] != DBNull.Value
+                    
+                    string nativeTypeName = schemaTable.Columns.Contains("DataTypeName") && row["DataTypeName"] != DBNull.Value
                         ? row["DataTypeName"].ToString() ?? ""
-                        : row["DataType"].ToString() ?? "";
+                        : "";
+                    string dotNetTypeName = row["DataType"] != DBNull.Value ? row["DataType"].ToString() ?? "" : "";
+                    
+                    string columnType = !string.IsNullOrWhiteSpace(nativeTypeName) ? nativeTypeName : dotNetTypeName;
+                    
                     bool isKey = row["IsKey"] != DBNull.Value && (bool)row["IsKey"];
                     
-                    Log.Debug("Column schema: {ColumnName} = {ColumnType} (native), {NetType} (.NET), IsLob={IsLob}", 
-                        columnName, columnType, row["DataType"], IsLobColumnType(columnType));
+                    Log.Debug("Column schema: {ColumnName} = native='{NativeType}' dotnet='{DotNetType}' -> using='{ColumnType}', IsLob={IsLob}", 
+                        columnName, nativeTypeName, dotNetTypeName, columnType, IsLobColumnType(columnType));
 
                     if (_columnsToSkip.Contains(columnName))
                     {
@@ -247,18 +257,22 @@ public class DataExtractor
             return false;
         }
 
-        var typeUpper = columnType.ToUpperInvariant();
-        
-        foreach (var lobType in LobColumnTypes)
+        if (LobColumnTypes.Contains(columnType))
         {
-            if (typeUpper.Contains(lobType, StringComparison.OrdinalIgnoreCase))
+            Log.Debug("Column type '{ColumnType}' matched LOB exact type", columnType);
+            return true;
+        }
+
+        foreach (var pattern in LobTypePatterns)
+        {
+            if (columnType.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                Log.Debug("Column type '{ColumnType}' matched LOB pattern '{LobPattern}'", columnType, lobType);
+                Log.Debug("Column type '{ColumnType}' matched LOB pattern '{Pattern}'", columnType, pattern);
                 return true;
             }
         }
         
-        Log.Debug("Column type '{ColumnType}' is NOT a LOB (checked {Count} patterns)", columnType, LobColumnTypes.Count);
+        Log.Debug("Column type '{ColumnType}' is NOT a LOB", columnType);
         return false;
     }
 
