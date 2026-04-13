@@ -17,6 +17,8 @@ public class DataExtractor
     private readonly int _lobSizeLimit;
     private readonly int _extraOrderColumns;  // Additional columns to add for retry logic
 
+    private readonly Dictionary<string, TableMetadata> _metadataCache = new(StringComparer.OrdinalIgnoreCase);
+
     private static readonly HashSet<string> LobColumnTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "BLOB", "CLOB", "NCLOB", "BFILE",                              // Oracle LOB types (exact)
@@ -114,6 +116,12 @@ public class DataExtractor
 
     public TableMetadata GetTableMetadata(string tableReference)
     {
+        if (_metadataCache.TryGetValue(tableReference, out var cached))
+        {
+            Log.Debug("Returning cached metadata for table: {TableReference}", tableReference);
+            return cached;
+        }
+
         Log.Information("Retrieving metadata for table: {TableReference}", tableReference);
 
         string? schema = null;
@@ -128,6 +136,10 @@ public class DataExtractor
 
         var columns = new List<TableMetadata.ColumnMetadata>();
         var primaryKeyColumns = new List<string>();
+
+        var oracleNativeTypes = _databaseType == DatabaseType.Oracle && schema != null
+            ? GetOracleNativeSqlTypes(schema, tableName)
+            : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = $"SELECT * FROM {tableReference} WHERE 1=0"; // Get schema only, no data
@@ -149,8 +161,16 @@ public class DataExtractor
                         ? row["DataTypeName"].ToString() ?? ""
                         : "";
                     string dotNetTypeName = row["DataType"] != DBNull.Value ? row["DataType"].ToString() ?? "" : "";
-                    
-                    string columnType = !string.IsNullOrWhiteSpace(nativeTypeName) ? nativeTypeName : dotNetTypeName;
+
+                    string columnType;
+                    if (oracleNativeTypes.TryGetValue(columnName, out var oracleSqlType) && !string.IsNullOrWhiteSpace(oracleSqlType))
+                    {
+                        columnType = oracleSqlType;
+                    }
+                    else
+                    {
+                        columnType = !string.IsNullOrWhiteSpace(nativeTypeName) ? nativeTypeName : dotNetTypeName;
+                    }
                     
                     bool isKey = row["IsKey"] != DBNull.Value && (bool)row["IsKey"];
                     
@@ -247,7 +267,9 @@ public class DataExtractor
             Log.Information("Order by columns: {OrderColumns}", string.Join(", ", primaryKeyColumns));
         }
 
-        return new TableMetadata(tableReference, columns, primaryKeyColumns);
+        var metadata = new TableMetadata(tableReference, columns, primaryKeyColumns);
+        _metadataCache[tableReference] = metadata;
+        return metadata;
     }
 
     private bool IsLobColumnType(string columnType)
@@ -289,6 +311,26 @@ public class DataExtractor
             return true;
         }
         
+        return false;
+    }
+
+    private static bool IsFloatingPointColumnType(string columnTypeUpper)
+    {
+        if (columnTypeUpper == "FLOAT" ||
+            columnTypeUpper == "REAL"  ||
+            columnTypeUpper == "BINARY_FLOAT" ||
+            columnTypeUpper == "BINARY_DOUBLE")
+        {
+            return true;
+        }
+
+        if (columnTypeUpper.StartsWith("FLOAT(") ||
+            columnTypeUpper.StartsWith("BINARY_FLOAT(") ||
+            columnTypeUpper.StartsWith("BINARY_DOUBLE("))
+        {
+            return true;
+        }
+
         return false;
     }
 
@@ -420,6 +462,72 @@ public class DataExtractor
         }
 
         return stats;
+    }
+
+
+    private Dictionary<string, string> GetOracleNativeSqlTypes(string schema, string tableName)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var cleanSchema    = schema.Trim('"').ToUpper();
+            var cleanTableName = tableName.Trim('"').ToUpper();
+
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT column_name, data_type
+                FROM all_columns
+                WHERE owner      = :schema_name
+                  AND table_name = :table_name";
+
+            var schemaParam = cmd.CreateParameter();
+            schemaParam.ParameterName = "schema_name";
+            schemaParam.Value = cleanSchema;
+            cmd.Parameters.Add(schemaParam);
+
+            var tableParam = cmd.CreateParameter();
+            tableParam.ParameterName = "table_name";
+            tableParam.Value = cleanTableName;
+            cmd.Parameters.Add(tableParam);
+
+            cmd.CommandTimeout = _commandTimeoutSeconds;
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var colName  = reader.GetString(0);
+                var dataType = reader.GetString(1);
+                result[colName] = dataType;
+            }
+
+            if (result.Count == 0)
+            {
+                Log.Warning("GetOracleNativeSqlTypes returned 0 rows for {Schema}.{Table} — " +
+                            "check that the connecting user has SELECT on ALL_COLUMNS and the " +
+                            "schema/table names are correct. Float columns will not be normalised.",
+                            cleanSchema, cleanTableName);
+            }
+            else
+            {
+                Log.Information("Loaded {Count} Oracle native SQL types for {Schema}.{Table} — " +
+                                "float columns: {FloatCols}",
+                                result.Count, cleanSchema, cleanTableName,
+                                string.Join(", ", result.Where(kv =>
+                                    kv.Value.Equals("FLOAT", StringComparison.OrdinalIgnoreCase) ||
+                                    kv.Value.Equals("BINARY_FLOAT", StringComparison.OrdinalIgnoreCase) ||
+                                    kv.Value.Equals("BINARY_DOUBLE", StringComparison.OrdinalIgnoreCase) ||
+                                    kv.Value.Equals("REAL", StringComparison.OrdinalIgnoreCase))
+                                .Select(kv => $"{kv.Key}={kv.Value}")));
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("Could not load Oracle native SQL types for {Schema}.{Table}: {Error}. " +
+                        "Float columns may not be normalised correctly.",
+                        schema, tableName, ex.Message);
+        }
+
+        return result;
     }
 
 
@@ -568,20 +676,60 @@ public class DataExtractor
                     {
                         row[i] = null;
                     }
+                    else
+                    {
+                        if (i < metadata.Columns.Count && row[i] is decimal floatDecVal)
+                        {
+                            var colTypeUpper = (metadata.Columns[i].Type ?? "").ToUpperInvariant();
+                            if (IsFloatingPointColumnType(colTypeUpper))
+                            {
+                                row[i] = (double)floatDecVal;
+                                Log.Debug("Normalised column {Name} ({Type}) decimal→double for float type alignment",
+                                    metadata.Columns[i].Name, metadata.Columns[i].Type);
+                            }
+                        }
+                    }
                 }
                 catch (OverflowException)
                 {
-                    try
+                    bool handled = false;
+                    if (i < metadata.Columns.Count)
                     {
-                        row[i] = reader.GetString(i);
-                        Log.Debug("Column {Index} ({Name}) value exceeds decimal range, retrieved as string", 
-                            i, reader.GetName(i));
+                        var colTypeUpper = (metadata.Columns[i].Type ?? "").ToUpperInvariant();
+                        if (IsFloatingPointColumnType(colTypeUpper))
+                        {
+                            try
+                            {
+                                row[i] = reader.GetDouble(i);
+                                Log.Debug("Column {Index} ({Name}) overflow as decimal → retrieved as double for float8 alignment",
+                                    i, reader.GetName(i));
+                                handled = true;
+                            }
+                            catch (Exception exDbl)
+                            {
+                                row[i] = null;
+                                Log.Warning("Column {Index} ({Name}) FLOAT value could not be read as decimal or double — " +
+                                            "stored as NULL: {Error}",
+                                    i, reader.GetName(i), exDbl.Message);
+                                handled = true;
+                            }
+                        }
                     }
-                    catch
+
+                    if (!handled)
                     {
-                        row[i] = null;
-                        Log.Warning("Column {Index} ({Name}) overflow and cannot be retrieved as string, setting to NULL", 
-                            i, reader.GetName(i));
+                        try
+                        {
+                            row[i] = reader.GetString(i);
+                            Log.Debug("Column {Index} ({Name}) value exceeds decimal range, retrieved as string",
+                                i, reader.GetName(i));
+                        }
+                        catch
+                        {
+                            row[i] = null;
+                            Log.Warning("Column {Index} ({Name}) overflow and cannot be retrieved as string, setting to NULL",
+                                i, reader.GetName(i));
+                        }
                     }
                 }
             }
@@ -826,9 +974,7 @@ public class DataExtractor
         }
         else if (metadata.Columns.Any(c => IsLobColumnType(c.Type)))
         {
-            // Always build explicit column list when LOB columns exist.
-            // Never use SELECT * with LOBs: Oracle ADO.NET implicitly converts CLOB to string
-            // which fails with ORA-22835 when CLOB > 4000 bytes.
+
             var columnExpressions = new List<string>();
             int lobLimitedCount = 0;
             
@@ -894,14 +1040,11 @@ public class DataExtractor
             if (typeUpper.Contains("BYTE[]") || typeUpper.Contains("BYTE") ||
                 typeUpper.Contains("BLOB"))
             {
-                // BLOB -> RAW: Oracle RAW limit is 2000 bytes in SQL context
                 var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 2000) : 2000;
                 return $"DBMS_LOB.SUBSTR({quotedName}, {effectiveLimit}, 1) AS {quotedName}";
             }
             else if (typeUpper.Contains("CLOB") || typeUpper.Contains("NCLOB"))
             {
-                // CLOB -> VARCHAR2: Oracle VARCHAR2 limit is 4000 bytes in SQL context
-                // DBMS_LOB.SUBSTR handles NULL safely (returns NULL for NULL input)
                 var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 4000) : 4000;
                 return $"DBMS_LOB.SUBSTR({quotedName}, {effectiveLimit}, 1) AS {quotedName}";
             }
@@ -915,13 +1058,11 @@ public class DataExtractor
         {
             if (typeUpper.Contains("BYTEA") || typeUpper.Contains("BYTE[]") || typeUpper.Contains("BYTE"))
             {
-                // Match Oracle BLOB limit so hashes are comparable
                 var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 2000) : 2000;
                 return $"substring({quotedName} from 1 for {effectiveLimit}) AS {quotedName}";
             }
             else if (typeUpper.Contains("TEXT"))
             {
-                // Match Oracle CLOB limit so hashes are comparable
                 var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 4000) : 4000;
                 return $"substring({quotedName} from 1 for {effectiveLimit}) AS {quotedName}";
             }

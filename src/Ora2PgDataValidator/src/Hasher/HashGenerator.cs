@@ -69,6 +69,16 @@ public static class HashGenerator
 
         if (value is decimal decVal)
         {
+            if (decVal == Math.Truncate(decVal) && decVal >= long.MinValue && decVal <= long.MaxValue)
+            {
+                return ((long)decVal).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            if (decVal == Math.Truncate(decVal))
+            {
+                return ((double)decVal).ToString("G17", System.Globalization.CultureInfo.InvariantCulture);
+            }
+
             return decVal.ToString("G29", System.Globalization.CultureInfo.InvariantCulture);
         }
 
@@ -90,12 +100,12 @@ public static class HashGenerator
 
         if (value is DateTime dt)
         {
-            return dt.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture);
+            return dt.ToString("yyyy-MM-dd HH:mm:ss.ffffff", System.Globalization.CultureInfo.InvariantCulture);
         }
 
         if (value is DateTimeOffset dto)
         {
-            return dto.ToString("yyyy-MM-dd HH:mm:ss.fffzzz", System.Globalization.CultureInfo.InvariantCulture);
+            return dto.ToString("yyyy-MM-dd HH:mm:ss.ffffffzzz", System.Globalization.CultureInfo.InvariantCulture);
         }
 
         if (value is TimeSpan ts)
@@ -134,12 +144,84 @@ public static class HashGenerator
 
         if (value is char charVal)
         {
-            return charVal.ToString();
+            return charVal.ToString().TrimEnd();
+        }
+        if (value is string rawStr)
+        {
+            return rawStr.TrimEnd();
         }
 
-        return value.ToString() ?? "NULL";
+        var stringValue = value.ToString() ?? "NULL";
+
+        if (TryParseOracleTimestampString(stringValue, out var parsedDt))
+        {
+            return parsedDt.ToString("yyyy-MM-dd HH:mm:ss.ffffff", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        return stringValue;
     }
-    
+
+    private static bool TryParseOracleTimestampString(string value, out DateTime result)
+    {
+        result = default;
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var oracleNlsFormats = new[]
+        {
+            "d-MMM-yy h.mm.ss.ffffff tt",
+            "d-MMM-yy h.mm.ss.fffff tt",
+            "d-MMM-yy h.mm.ss.ffff tt",
+            "d-MMM-yy h.mm.ss.fff tt",
+            "d-MMM-yy h.mm.ss.ff tt",
+            "d-MMM-yy h.mm.ss.f tt",
+            "d-MMM-yy h.mm.ss tt",
+            "d-MMM-yyyy h.mm.ss.ffffff tt",
+            "d-MMM-yyyy h.mm.ss.fffff tt",
+            "d-MMM-yyyy h.mm.ss.ffff tt",
+            "d-MMM-yyyy h.mm.ss.fff tt",
+            "d-MMM-yyyy h.mm.ss tt",
+        };
+
+        foreach (var fmt in oracleNlsFormats)
+        {
+            if (DateTime.TryParseExact(value, fmt,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out result))
+            {
+                return true;
+            }
+        }
+
+        var isoFormats = new[]
+        {
+            "yyyy-MM-dd HH:mm:ss.ffffff",
+            "yyyy-MM-dd HH:mm:ss.fffff",
+            "yyyy-MM-dd HH:mm:ss.ffff",
+            "yyyy-MM-dd HH:mm:ss.fff",
+            "yyyy-MM-dd HH:mm:ss.ff",
+            "yyyy-MM-dd HH:mm:ss.f",
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-dd HH:mm",
+            "yyyy-MM-dd",
+        };
+
+        foreach (var fmt in isoFormats)
+        {
+            if (DateTime.TryParseExact(value, fmt,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out result))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool IsLikelyGuidString(string value)
     {
         bool hasHyphen = false;
