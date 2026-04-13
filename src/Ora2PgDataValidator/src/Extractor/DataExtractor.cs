@@ -532,7 +532,11 @@ public class DataExtractor
     {
         var metadata = GetTableMetadata(tableReference);
 
+        Log.Information("Table {Table} columns: {Columns}", tableReference,
+            string.Join(", ", metadata.Columns.Select(c => $"{c.Name}({c.Type})")));
+
         string sql = BuildSelectQuery(tableReference, metadata);
+        Log.Information("Executing SQL for {Table}: {Sql}", tableReference, sql);
 
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = sql;

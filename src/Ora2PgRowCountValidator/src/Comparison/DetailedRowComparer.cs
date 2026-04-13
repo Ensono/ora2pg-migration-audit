@@ -124,72 +124,54 @@ public class DetailedRowComparer
         PrimaryKeyInfo pkInfo, 
         int maxRowsToCheck)
     {
-        var missingRows = new List<MissingRowInfo>();
-
         var oracleRows = await _oraclePkExtractor.FindMissingRowsAsync(
             _oracleSchema, 
             tableName, 
             pkInfo, 
             maxRowsToCheck);
 
-        foreach (var oracleRow in oracleRows)
-        {
-            var existsInPostgres = await _postgresPkExtractor.RowExistsAsync(
-                _postgresSchema,
-                tableName,
-                pkInfo,
-                oracleRow.PrimaryKeyValues);
+        if (oracleRows.Count == 0) return new List<MissingRowInfo>();
 
-            if (!existsInPostgres)
-            {
-                missingRows.Add(oracleRow);
-                
-                if (missingRows.Count >= MaxRowsToDisplay)
-                {
-                    break; // Limit display to avoid overwhelming reports
-                }
-            }
-        }
+        var existingInPostgres = await _postgresPkExtractor.BulkRowExistsAsync(
+            _postgresSchema,
+            tableName,
+            pkInfo,
+            oracleRows.Select(r => r.PrimaryKeyValues).ToList());
 
-        return missingRows;
+        return oracleRows
+            .Where(r => !existingInPostgres.Contains(BuildPkKey(r.PrimaryKeyValues, pkInfo)))
+            .Take(MaxRowsToDisplay)
+            .ToList();
     }
-
-
-
 
     private async Task<List<MissingRowInfo>> FindExtraInPostgresAsync(
         string tableName, 
         PrimaryKeyInfo pkInfo, 
         int maxRowsToCheck)
     {
-        var extraRows = new List<MissingRowInfo>();
-
         var postgresRows = await _postgresPkExtractor.FindExtraRowsAsync(
             _postgresSchema, 
             tableName, 
             pkInfo, 
             maxRowsToCheck);
 
-        foreach (var postgresRow in postgresRows)
-        {
-            var existsInOracle = await _oraclePkExtractor.RowExistsAsync(
-                _oracleSchema,
-                tableName,
-                pkInfo,
-                postgresRow.PrimaryKeyValues);
+        if (postgresRows.Count == 0) return new List<MissingRowInfo>();
 
-            if (!existsInOracle)
-            {
-                extraRows.Add(postgresRow);
-                
-                if (extraRows.Count >= MaxRowsToDisplay)
-                {
-                    break; // Limit display to avoid overwhelming reports
-                }
-            }
-        }
+        var existingInOracle = await _oraclePkExtractor.BulkRowExistsAsync(
+            _oracleSchema,
+            tableName,
+            pkInfo,
+            postgresRows.Select(r => r.PrimaryKeyValues).ToList());
 
-        return extraRows;
+        return postgresRows
+            .Where(r => !existingInOracle.Contains(BuildPkKey(r.PrimaryKeyValues, pkInfo)))
+            .Take(MaxRowsToDisplay)
+            .ToList();
+    }
+
+    private static string BuildPkKey(Dictionary<string, object?> pkValues, PrimaryKeyInfo pkInfo)
+    {
+        return string.Join("|", pkInfo.PrimaryKeyColumns.Select(col => pkValues.GetValueOrDefault(col)?.ToString() ?? "NULL"));
     }
 
 

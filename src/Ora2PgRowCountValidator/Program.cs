@@ -226,10 +226,15 @@ class Program
         Log.Information($"[{oracleSchema}] ✓ Found {postgresCounts.Count} tables in PostgreSQL (Total: {postgresCounts.Sum(t => t.RowCount):N0} rows)");
 
         Log.Information($"[{oracleSchema}] 🔍 Comparing row counts...");
+        var enableDetailedComparison = props.Get("DETAILED_ROW_COMPARISON", "true")
+            .Equals("true", StringComparison.OrdinalIgnoreCase);
         var comparer = new RowCountComparer(
             oracleConnString, 
             postgresConnString, 
-            enableDetailedComparison: true);
+            enableDetailedComparison: enableDetailedComparison);
+        
+        if (!enableDetailedComparison)
+            Log.Information($"[{oracleSchema}] ℹ️  Detailed row comparison disabled (DETAILED_ROW_COMPARISON=false)");
         
         var result = await comparer.CompareAsync(
             oracleCounts,

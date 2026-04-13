@@ -299,6 +299,18 @@ COMMAND_TIMEOUT_SECONDS=600
 # For row count validation with tables >100M rows, consider 1800 seconds (30 min)
 ```
 
+#### Detailed Row Comparison (Row Count Validator)
+
+When row counts differ between Oracle and PostgreSQL, the Row Count Validator can perform a detailed comparison to identify **which specific rows** are missing or extra, using bulk primary-key queries (2 queries per mismatched table).
+
+```dotenv
+# true  = Identify missing/extra rows by primary key (default, ~2 bulk queries per mismatch)
+# false = Only report count differences — fastest option for large tables
+DETAILED_ROW_COMPARISON=true
+```
+
+> **Tip:** Set `DETAILED_ROW_COMPARISON=false` when you only need to know *that* counts differ (not *which* rows), or when mismatched tables are very large and even bulk queries are slow.
+
 #### Row Limiting
 
 ```dotenv
