@@ -2,10 +2,7 @@
 
 **Generic, database-agnostic tools for validating any Oracle to PostgreSQL migration.**
 
-This solution provides production-ready validation tools that work with **any Oracle and PostgreSQL database** - not limited to specific schemas or sample| `BLOB_SIZE_LIMIT=2000` | 🏃 Fast | Max allowed (Oracle limit) |
-| Default (0) | Slow | Full LOB transferred |
-
-> **⚠️ Important:** `LOB_SIZE_LIMIT` must be 2000 or less. Values greater than 2000 will cause the validator to fail immediately with an error. This limit applies to both BLOB and CLOB columns for consistent hash comparison between Oracle and PostgreSQL.abases.
+This solution provides production-ready validation tools that work with **any Oracle and PostgreSQL database** - not limited to specific schemas or sample databases.
 
 ## What's Included
 
