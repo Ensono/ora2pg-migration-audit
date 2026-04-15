@@ -636,6 +636,19 @@ public class DataExtractor
     }
 
 
+    // Eastern Time zone — used to convert Oracle TIMESTAMP WITH TIME ZONE values
+    // that the ODP.NET driver returns as plain DateTime (local time) back to UTC,
+    // so they match the UTC DateTime that Npgsql returns for PostgreSQL timestamptz columns.
+    private static readonly TimeZoneInfo _easternTz =
+        TimeZoneInfo.FindSystemTimeZoneById(
+            OperatingSystem.IsWindows()
+                ? "Eastern Standard Time"
+                : "America/New_York");
+
+    private static bool IsTimestampWithTimeZoneType(string columnTypeUpper) =>
+        columnTypeUpper.Contains("WITH TIME ZONE") ||
+        columnTypeUpper.Contains("WITH LOCAL TIME ZONE");
+
     private void ProcessRows(string tableReference, Action<List<object?[]>> consumer, int batchSize)
     {
         var metadata = GetTableMetadata(tableReference);
@@ -678,10 +691,25 @@ public class DataExtractor
                     }
                     else
                     {
-                        if (i < metadata.Columns.Count && row[i] is decimal floatDecVal)
+                        if (i < metadata.Columns.Count)
                         {
                             var colTypeUpper = (metadata.Columns[i].Type ?? "").ToUpperInvariant();
-                            if (IsFloatingPointColumnType(colTypeUpper))
+
+                            if (_databaseType == DatabaseType.Oracle && row[i] is DateTime oracleDt)
+                            {
+                                if (IsTimestampWithTimeZoneType(colTypeUpper))
+                                {
+                                    var utc = TimeZoneInfo.ConvertTimeToUtc(
+                                        DateTime.SpecifyKind(oracleDt, DateTimeKind.Unspecified),
+                                        _easternTz);
+                                    row[i] = utc;
+                                    Log.Debug("Normalised column {Name} ({Type}) DateTime(EST)→DateTime(UTC): {Before}→{After}",
+                                        metadata.Columns[i].Name, metadata.Columns[i].Type, oracleDt, utc);
+                                }
+                            }
+
+                            if (row[i] is decimal floatDecVal &&
+                                IsFloatingPointColumnType(colTypeUpper))
                             {
                                 row[i] = (double)floatDecVal;
                                 Log.Debug("Normalised column {Name} ({Type}) decimal→double for float type alignment",

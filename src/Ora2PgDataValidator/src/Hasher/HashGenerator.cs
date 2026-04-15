@@ -3,13 +3,21 @@ using System.Text;
 using System.Xml;
 using System.Xml.Linq;
 using Ora2Pg.Common.Config;
+using Serilog;
 
 namespace Ora2PgDataValidator.Hasher;
 
 public static class HashGenerator
 {
     private static readonly bool _skipBlobColumns;
-    
+
+    // When DEBUG_ROWS=N is set, log the pre-hash string value of every column
+    // for the first N rows processed. Useful for diagnosing hash mismatches.
+    // Optionally restrict to a specific table with DEBUG_TABLE=<tablename>.
+    private static readonly int _debugRows;
+    private static readonly string _debugTable;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _debugCounters = new();
+
     static HashGenerator()
     {
         var props = ApplicationProperties.Instance;
@@ -17,26 +25,59 @@ public static class HashGenerator
         _skipBlobColumns = props.Get("SKIP_LOB_COLUMNS",
                                      props.Get("SKIP_BLOB_COLUMNS", "false"))
                                 .Equals("true", StringComparison.OrdinalIgnoreCase);
+
+        _debugRows  = props.GetInt("DEBUG_ROWS", 0);
+        _debugTable = props.Get("DEBUG_TABLE", "").Trim();
+
+        if (_debugRows > 0)
+        {
+            Log.Warning("HashGenerator debug mode ON — will log pre-hash values for first {N} rows{Filter}",
+                _debugRows,
+                string.IsNullOrEmpty(_debugTable) ? "" : $" of table '{_debugTable}'");
+        }
     }
     
-    public static string GenerateHash(Dictionary<string, object?> rowData, string algorithm = "SHA256")
+    public static string GenerateHash(Dictionary<string, object?> rowData, string algorithm = "SHA256",
+                                       string? tableHint = null)
     {
         var sortedKeys = rowData.Keys.OrderBy(k => k).ToList();
 
         var sb = new StringBuilder();
+
+        bool shouldDebug = _debugRows > 0
+            && (string.IsNullOrEmpty(_debugTable)
+                || tableHint != null && tableHint.Contains(_debugTable, StringComparison.OrdinalIgnoreCase));
+
+        var debugParts = shouldDebug ? new List<string>() : null;
+
         foreach (var key in sortedKeys)
         {
             var value = rowData[key];
             string valueStr = ConvertValueToString(value);
-            
+
+            debugParts?.Add($"{key}[{value?.GetType().Name ?? "null"}]={valueStr}");
+
             if (sb.Length > 0)
             {
                 sb.Append('|');
             }
             sb.Append(valueStr);
         }
-        
+
         string input = sb.ToString();
+
+        if (debugParts != null)
+        {
+            string counterKey = tableHint ?? "?";
+            int logged = _debugCounters.AddOrUpdate(counterKey, 1, (_, v) => v + 1);
+            if (logged <= _debugRows)
+            {
+                Log.Information("[DEBUG_ROWS] Table={Table} Row={Row} PreHashString={PreHash}",
+                    tableHint ?? "?", logged, input);
+                Log.Information("[DEBUG_ROWS] Columns: {Cols}", string.Join(" | ", debugParts));
+            }
+        }
+
         byte[] inputBytes = Encoding.UTF8.GetBytes(input);
         
         byte[] hashBytes = algorithm.ToUpper() switch
@@ -105,7 +146,10 @@ public static class HashGenerator
 
         if (value is DateTimeOffset dto)
         {
-            return dto.ToString("yyyy-MM-dd HH:mm:ss.ffffffzzz", System.Globalization.CultureInfo.InvariantCulture);
+            // Normalize to UTC so that the same instant with different offsets
+            // (e.g. Oracle -04:00 vs PostgreSQL +00:00) produces the same hash.
+            var utc = dto.ToUniversalTime();
+            return utc.ToString("yyyy-MM-dd HH:mm:ss.ffffff", System.Globalization.CultureInfo.InvariantCulture);
         }
 
         if (value is TimeSpan ts)

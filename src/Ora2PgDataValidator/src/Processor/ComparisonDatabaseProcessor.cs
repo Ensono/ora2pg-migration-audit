@@ -524,7 +524,7 @@ public class ComparisonDatabaseProcessor
                     rowDict[metadata.Columns[i].Name] = row[i];
                 }
 
-                string hash = HashGenerator.GenerateHash(rowDict, _hashAlgorithm);
+                string hash = HashGenerator.GenerateHash(rowDict, _hashAlgorithm, tableRef);
                 hashes[rowNumber.ToString()] = hash;
                 rowData[rowNumber.ToString()] = rowDict;
             }
