@@ -90,6 +90,8 @@ public static class HashGenerator
         return Convert.ToHexString(hashBytes).ToLower();
     }
     
+    public static string ConvertValueToStringPublic(object? value) => ConvertValueToString(value);
+    
     private static string ConvertValueToString(object? value)
     {
         if (value is null || value is DBNull)

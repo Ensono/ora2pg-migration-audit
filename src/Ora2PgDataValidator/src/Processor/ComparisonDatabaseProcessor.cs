@@ -21,6 +21,8 @@ public class ComparisonDatabaseProcessor
     private readonly string _oracleDatabase;
     private readonly string _postgresDatabase;
     private readonly int _parallelTables;
+    private readonly int _debugRows;
+    private int _mismatchedRowsLogged = 0;
 
     public ComparisonDatabaseProcessor(DatabaseConnectionManager connectionManager)
     {
@@ -36,6 +38,12 @@ public class ComparisonDatabaseProcessor
         _postgresDatabase = props.Get("POSTGRES_DB", "");
 
         _parallelTables = props.GetInt("PARALLEL_TABLES", 4);
+        _debugRows = props.GetInt("DEBUG_ROWS", 0);
+        
+        if (_debugRows > 0)
+        {
+            Log.Information("Mismatch detail logging enabled: will show detailed comparison for first {N} mismatched rows", _debugRows);
+        }
     }
 
 
@@ -566,6 +574,22 @@ public class ComparisonDatabaseProcessor
                     var postgresPkValues = ExtractPrimaryKeyValues(postgresRows[oracleEntry.Key], postgresMetadata.PrimaryKeyColumns);
                     
                     result.AddMismatchedRow(rowId, oracleHash, postgresHash, oraclePkValues, postgresPkValues);
+
+                    // Log detailed comparison for mismatched rows (limited by DEBUG_ROWS)
+                    if (_debugRows > 0 && _mismatchedRowsLogged < _debugRows)
+                    {
+                        int logged = System.Threading.Interlocked.Increment(ref _mismatchedRowsLogged);
+                        if (logged <= _debugRows)
+                        {
+                            Log.Warning("[MISMATCH] Row {RowId} - Oracle hash: {OracleHash}, PostgreSQL hash: {PostgresHash}",
+                                rowId, oracleHash, postgresHash);
+                            
+                            var oracleData = oracleRows[oracleEntry.Key];
+                            var postgresData = postgresRows[oracleEntry.Key];
+                            
+                            LogRowComparison(rowId, oracleData, postgresData, oracleMetadata.Columns);
+                        }
+                    }
                 }
             }
             else
@@ -596,6 +620,67 @@ public class ComparisonDatabaseProcessor
 
         Log.Information("  Comparison: {Matching} matching, {Mismatched} mismatched, {Missing} missing, {Extra} extra",
                        matching, mismatched, missing, extra);
+    }
+
+    private void LogRowComparison(int rowId, 
+                                  Dictionary<string, object?> oracleData,
+                                  Dictionary<string, object?> postgresData,
+                                  List<TableMetadata.ColumnMetadata> columns)
+    {
+        var differences = new List<string>();
+        int oracleNullCount = 0;
+        int postgresNullCount = 0;
+        
+        foreach (var col in columns)
+        {
+            var oracleValue = oracleData.GetValueOrDefault(col.Name);
+            
+            var pgKey = postgresData.Keys.FirstOrDefault(k => k.Equals(col.Name, StringComparison.OrdinalIgnoreCase));
+            var postgresValue = pgKey != null ? postgresData[pgKey] : null;
+            
+            if (oracleValue == null) oracleNullCount++;
+            if (postgresValue == null) postgresNullCount++;
+            
+            var oracleStr = HashGenerator.ConvertValueToStringPublic(oracleValue);
+            var postgresStr = HashGenerator.ConvertValueToStringPublic(postgresValue);
+            
+            if (oracleStr != postgresStr)
+            {
+                differences.Add($"{col.Name}: Oracle[{oracleValue?.GetType().Name ?? "null"}]={oracleStr} vs PG[{postgresValue?.GetType().Name ?? "null"}]={postgresStr}");
+            }
+        }
+        
+        if (differences.Count > 0)
+        {
+            Log.Warning("[MISMATCH] Row {RowId} differences: ({OracleNulls} Oracle NULLs, {PgNulls} PG NULLs, {TotalDiffs} total differences)",
+                rowId, oracleNullCount, postgresNullCount, differences.Count);
+            
+            if (oracleNullCount == 0 && postgresNullCount >= columns.Count * 0.8)
+            {
+                Log.Error("  ⚠️  PostgreSQL row is mostly NULL while Oracle has data — ROW ORDERING MISMATCH");
+                Log.Error("  ⚠️  The ORDER BY clause is producing different row sequences between Oracle and PostgreSQL");
+            }
+            else if (postgresNullCount == 0 && oracleNullCount >= columns.Count * 0.8)
+            {
+                Log.Error("  ⚠️  Oracle row is mostly NULL while PostgreSQL has data — ROW ORDERING MISMATCH");
+                Log.Error("  ⚠️  The ORDER BY clause is producing different row sequences between Oracle and PostgreSQL");
+            }
+            
+            // Only show first 10 differences to avoid log spam
+            foreach (var diff in differences.Take(10))
+            {
+                Log.Warning("  • {Difference}", diff);
+            }
+            
+            if (differences.Count > 10)
+            {
+                Log.Warning("  ... and {More} more differences", differences.Count - 10);
+            }
+        }
+        else
+        {
+            Log.Warning("[MISMATCH] Row {RowId} - No column differences found but hashes differ (ordering issue?)", rowId);
+        }
     }
     
     private Dictionary<string, object?> ExtractPrimaryKeyValues(Dictionary<string, object?> row, List<string> primaryKeyColumns)
