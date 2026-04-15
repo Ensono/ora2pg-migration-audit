@@ -322,6 +322,36 @@ public class DataExtractor
                columnTypeUpper.StartsWith("TIMESTAMP");
     }
 
+    private static bool IsNumericOrTimestampColumnType(string columnTypeUpper)
+    {
+        // Timestamps (highest priority for ordering)
+        if (IsTimestampColumnType(columnTypeUpper))
+            return true;
+        
+        // Integer types (perfect cross-DB consistency)
+        if (columnTypeUpper.Contains("INT") || 
+            columnTypeUpper.StartsWith("NUMBER") || 
+            columnTypeUpper == "BIGINT" || 
+            columnTypeUpper == "SMALLINT" || 
+            columnTypeUpper == "TINYINT" ||
+            columnTypeUpper.Contains("SERIAL"))
+            return true;
+        
+        // Decimal/numeric types (consistent if precision matches)
+        if (columnTypeUpper == "NUMERIC" || 
+            columnTypeUpper.StartsWith("NUMERIC(") ||
+            columnTypeUpper == "DECIMAL" ||
+            columnTypeUpper.StartsWith("DECIMAL(") ||
+            columnTypeUpper.StartsWith("NUMBER("))
+            return true;
+        
+        // Float types
+        if (IsFloatingPointColumnType(columnTypeUpper))
+            return true;
+        
+        return false;
+    }
+
     private static bool IsFloatingPointColumnType(string columnTypeUpper)
     {
         if (columnTypeUpper == "FLOAT" ||
@@ -644,9 +674,6 @@ public class DataExtractor
     }
 
 
-    // Eastern Time zone — used to convert Oracle TIMESTAMP WITH TIME ZONE values
-    // that the ODP.NET driver returns as plain DateTime (local time) back to UTC,
-    // so they match the UTC DateTime that Npgsql returns for PostgreSQL timestamptz columns.
     private static readonly TimeZoneInfo _easternTz =
         TimeZoneInfo.FindSystemTimeZoneById(
             OperatingSystem.IsWindows()
@@ -849,33 +876,34 @@ public class DataExtractor
     {
         var orderColumns = new List<TableMetadata.ColumnMetadata>();
         
-        // Priority 1: Timestamp columns (highest precision/uniqueness)
-        var timestampColumns = allOrderableColumns
-            .Where(c => IsTimestampColumnType(c.Type.ToUpperInvariant()))
-            .OrderByDescending(c => c.Type.ToUpperInvariant().Contains("TIMESTAMP") ? 2 : 1)
+        // Priority 1: Numeric/timestamp columns FIRST (deterministic ordering across DBs)
+        var numericColumns = allOrderableColumns
+            .Where(c => IsNumericOrTimestampColumnType(c.Type.ToUpperInvariant()))
+            .OrderByDescending(c => IsTimestampColumnType(c.Type.ToUpperInvariant()) ? 2 : 1) // Timestamps highest priority
+            .ThenByDescending(c => primaryKeyColumns.Any(pk => pk.Equals(c.Name, StringComparison.OrdinalIgnoreCase)) ? 1 : 0) // Then PKs
             .ThenByDescending(c => GetDistinctCount(c.Name, columnStats))
-            .Take(3)
+            .Take(Math.Max(targetCount / 2, 3)) // At least half the order columns should be numeric
             .ToList();
         
-        orderColumns.AddRange(timestampColumns);
+        orderColumns.AddRange(numericColumns);
         
-        if (timestampColumns.Count > 0)
+        if (numericColumns.Count > 0)
         {
-            Log.Information("Using {Count} timestamp column(s): {Columns}",
-                timestampColumns.Count,
-                string.Join(", ", timestampColumns.Select(c => c.Name)));
+            Log.Information("Using {Count} numeric/timestamp column(s) for deterministic ordering: {Columns}",
+                numericColumns.Count,
+                string.Join(", ", numericColumns.Select(c => $"{c.Name}({c.Type})")));
         }
         
-        // Priority 2: High-cardinality columns
+        // Priority 2: High-cardinality string columns (after numeric stability)
         if (orderColumns.Count < targetCount)
         {
-            var highCardinalityColumns = allOrderableColumns
+            var stringColumns = allOrderableColumns
                 .Where(c => !orderColumns.Any(o => o.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase)))
                 .OrderByDescending(c => GetDistinctCount(c.Name, columnStats))
                 .ThenBy(c => GetNullCount(c.Name, columnStats))
                 .Take(targetCount - orderColumns.Count);
             
-            orderColumns.AddRange(highCardinalityColumns);
+            orderColumns.AddRange(stringColumns);
         }
         
         // Priority 3: Primary key columns (if not already included)
@@ -959,20 +987,45 @@ public class DataExtractor
     {
         var sql = new System.Text.StringBuilder($"SELECT {columnList} FROM {tableReference} ORDER BY {orderByClause}");
 
-        // Add deterministic tie-breaker using hash of key columns
         if (orderByClause != "1" && metadata.Columns.Count > 0)
         {
+            // Get columns already in ORDER BY
+            var columnsInOrderBy = new HashSet<string>(
+                orderByClause.Split(',')
+                    .Select(part => part.Trim())
+                    .Select(part => part.Split(new[] { ' ', '(' }, StringSplitOptions.RemoveEmptyEntries)[0])
+                    .Select(col => col.Trim('"', '[', ']'))
+                    .Where(col => !string.IsNullOrEmpty(col)),
+                StringComparer.OrdinalIgnoreCase);
+
+            // Add remaining orderable columns (except LOBs) with proper normalization
+            bool useAggressiveNormalization = _extraOrderColumns > 0;
+            var remainingColumns = metadata.Columns
+                .Where(c => IsOrderableColumnType(c.Type) && 
+                           !IsLobColumnType(c.Type) &&
+                           !columnsInOrderBy.Contains(c.Name))
+                .Select(c => BuildOrderByExpression(c.Name, c.Type, useAggressiveNormalization))
+                .ToList();
+            
+            if (remainingColumns.Count > 0)
+            {
+                sql.Append(", ");
+                sql.Append(string.Join(", ", remainingColumns));
+                Log.Information("Added {Count} additional columns to ORDER BY for deterministic sorting", remainingColumns.Count);
+            }
+
+            // Final tie-breaker: concatenation of all orderable columns as text,
+            // sorted identically on both sides using binary/C collation.
             var hashColumns = metadata.Columns
                 .Where(c => IsOrderableColumnType(c.Type) && !IsLobColumnType(c.Type))
-                .Take(5)
                 .Select(c => QuoteIdentifier(c.Name))
                 .ToList();
             
             if (hashColumns.Count > 0)
             {
                 string hashTieBreaker = _databaseType == DatabaseType.Oracle
-                    ? $", ORA_HASH({string.Join(" || '|' || ", hashColumns.Select(c => $"NVL(TO_CHAR({c}), 'NULL')"))}) ASC"
-                    : $", hashtext({string.Join(" || '|' || ", hashColumns.Select(c => $"COALESCE(CAST({c} AS TEXT), 'NULL')"))}) ASC";
+                    ? $", NLSSORT({string.Join(" || '|' || ", hashColumns.Select(c => $"NVL(TO_CHAR({c}), 'NULL')"))}, 'NLS_SORT=BINARY') ASC"
+                    : $", ({string.Join(" || '|' || ", hashColumns.Select(c => $"COALESCE(CAST({c} AS TEXT), 'NULL')"))}) COLLATE \"C\" ASC";
                 
                 sql.Append(hashTieBreaker);
             }
