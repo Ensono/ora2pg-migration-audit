@@ -725,9 +725,18 @@ public class DataExtractor
                             row[i] is DateTime oracleDt && 
                             IsTimestampWithTimeZoneType(colTypeUpper))
                         {
-                            row[i] = TimeZoneInfo.ConvertTimeToUtc(
-                                DateTime.SpecifyKind(oracleDt, DateTimeKind.Unspecified),
-                                _easternTz);
+                            try
+                            {
+                                row[i] = TimeZoneInfo.ConvertTimeToUtc(
+                                    DateTime.SpecifyKind(oracleDt, DateTimeKind.Unspecified),
+                                    _easternTz);
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Warning("Could not convert column {Name} value {Value} from EST to UTC ({Error}). Using value as-is.",
+                                    metadata.Columns[i].Name, oracleDt, ex.Message);
+                                row[i] = DateTime.SpecifyKind(oracleDt, DateTimeKind.Utc);
+                            }
                         }
 
                         // Convert Oracle FLOAT decimal to double for consistency with PostgreSQL
@@ -756,6 +765,12 @@ public class DataExtractor
                         row[i] = null;
                         Log.Warning("Column {Name} value overflow, setting to NULL", reader.GetName(i));
                     }
+                }
+                catch (ArgumentOutOfRangeException ex)
+                {
+                    row[i] = null;
+                    Log.Warning("Column {Name} has un-representable DateTime value ({Error}), setting to NULL", 
+                        reader.GetName(i), ex.Message);
                 }
             }
             batch.Add(row);
@@ -839,32 +854,15 @@ public class DataExtractor
 
     private string BuildSelectQuery(string tableReference, TableMetadata metadata)
     {
-        int totalOrderableColumns = metadata.Columns.Count(c => IsOrderableColumnType(c.Type));
-        
-        int baseTargetOrderColumns = totalOrderableColumns switch
-        {
-            <= 3 => totalOrderableColumns,
-            <= 6 => Math.Max(3, totalOrderableColumns - 1),
-            <= 10 => Math.Max(4, totalOrderableColumns / 2),
-            <= 15 => 5,
-            _ => 6
-        };
-        
-        int targetOrderColumns = Math.Max(1, Math.Min(baseTargetOrderColumns + _extraOrderColumns, totalOrderableColumns));
-        
-        if (_extraOrderColumns > 0)
-        {
-            Log.Information("Retry attempt: Using {Target} ORDER BY columns", targetOrderColumns);
-        }
-        
-        var allOrderableColumns = metadata.Columns.Where(c => IsOrderableColumnType(c.Type)).ToList();
-        var columnStats = GetColumnStatistics(tableReference, allOrderableColumns);
-        var orderColumns = BuildOrderColumnList(allOrderableColumns, columnStats, metadata.PrimaryKeyColumns, targetOrderColumns);
-        
+        var orderColumns = metadata.Columns
+            .Where(c => IsOrderableColumnType(c.Type) && !IsLobColumnType(c.Type))
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         string orderByClause = BuildOrderByClause(orderColumns);
         string columnList = BuildColumnList(metadata);
         string sql = BuildFinalQuery(tableReference, columnList, orderByClause, metadata);
-        
+
         return sql;
     }
 
@@ -1015,17 +1013,18 @@ public class DataExtractor
             }
 
             // Final tie-breaker: concatenation of all orderable columns as text,
-            // sorted identically on both sides using binary/C collation.
-            var hashColumns = metadata.Columns
+            // using explicit type-aware formatting so Oracle and PostgreSQL produce
+            // the same string for the same row (e.g. dates must use the same format).
+            var tieBreakColumns = metadata.Columns
                 .Where(c => IsOrderableColumnType(c.Type) && !IsLobColumnType(c.Type))
-                .Select(c => QuoteIdentifier(c.Name))
                 .ToList();
             
-            if (hashColumns.Count > 0)
+            if (tieBreakColumns.Count > 0)
             {
-                string hashTieBreaker = _databaseType == DatabaseType.Oracle
-                    ? $", NLSSORT({string.Join(" || '|' || ", hashColumns.Select(c => $"NVL(TO_CHAR({c}), 'NULL')"))}, 'NLS_SORT=BINARY') ASC"
-                    : $", ({string.Join(" || '|' || ", hashColumns.Select(c => $"COALESCE(CAST({c} AS TEXT), 'NULL')"))}) COLLATE \"C\" ASC";
+                var parts = tieBreakColumns.Select(c => BuildNormalisedTextExpression(c.Name, c.Type));
+                string concat = string.Join(" || '|' || ", parts);
+
+                string hashTieBreaker = $", {concat} ASC";
                 
                 sql.Append(hashTieBreaker);
             }
@@ -1040,6 +1039,35 @@ public class DataExtractor
 
         Log.Information("Query: {Sql}", sql.ToString());
         return sql.ToString();
+    }
+
+
+    private string BuildNormalisedTextExpression(string columnName, string columnType)
+    {
+        var q = QuoteIdentifier(columnName);
+        var typeUpper = (columnType ?? "").ToUpperInvariant();
+
+        if (_databaseType == DatabaseType.Oracle)
+        {
+            // DATE / TIMESTAMP → explicit ISO format matching PostgreSQL's text cast
+            if (typeUpper == "DATE" || typeUpper.StartsWith("TIMESTAMP"))
+                return $"CASE WHEN {q} IS NULL THEN 'NULL' WHEN {q} < DATE '1900-01-01' THEN TO_CHAR({q}) ELSE TO_CHAR({q}, 'YYYY-MM-DD HH24:MI:SS.FF6') END";
+
+            // NUMBER / FLOAT → use a fixed decimal format to avoid NLS-dependent output
+            if (typeUpper is "NUMBER" or "FLOAT" or "INTEGER" or "BINARY_FLOAT" or "BINARY_DOUBLE"
+                || typeUpper.StartsWith("NUMBER(") || typeUpper.StartsWith("FLOAT("))
+                return $"NVL(TO_CHAR({q}), 'NULL')";
+
+            return $"NVL(TO_CHAR({q}), 'NULL')";
+        }
+        else // PostgreSQL
+        {
+            // timestamp / timestamptz → explicit ISO format
+            if (typeUpper.Contains("TIMESTAMP") || typeUpper == "DATE")
+                return $"COALESCE(TO_CHAR({q}, 'YYYY-MM-DD HH24:MI:SS.US'), 'NULL')";
+
+            return $"COALESCE(CAST({q} AS TEXT), 'NULL')";
+        }
     }
 
     private string BuildLobLimitedColumn(string columnName, string columnType)
