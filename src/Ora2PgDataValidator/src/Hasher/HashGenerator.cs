@@ -183,6 +183,12 @@ public static class HashGenerator
                 {
                     return normalized; // Use normalized XML for consistent hashing
                 }
+                
+                normalized = strVal;
+                normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"<\?xml[^?]*\?>", "");
+                normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @">\s+<", "><");
+                normalized = normalized.Trim();
+                return normalized;
             }
             
             return strVal.TrimEnd(); // Only trim trailing whitespace (Oracle CHAR padding)

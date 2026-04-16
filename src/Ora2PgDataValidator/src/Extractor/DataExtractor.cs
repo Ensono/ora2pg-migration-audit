@@ -1,4 +1,5 @@
 using System.Data;
+using System.Xml.Linq;
 using Serilog;
 using Ora2Pg.Common.Config;
 using Ora2Pg.Common.Connection;
@@ -16,6 +17,7 @@ public class DataExtractor
     private readonly bool _skipLobColumns;
     private readonly int _lobSizeLimit;
     private readonly int _extraOrderColumns;  // Additional columns to add for retry logic
+    private readonly int _maxOrderByColumns;  // Hard cap on ORDER BY columns to avoid temp_file_limit
 
     private readonly Dictionary<string, TableMetadata> _metadataCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -111,6 +113,9 @@ public class DataExtractor
         }
 
         Log.Information("Database command timeout set to {TimeoutSeconds} seconds", _commandTimeoutSeconds);
+
+        _maxOrderByColumns = props.GetInt("MAX_ORDER_BY_COLUMNS", 6);
+        Log.Information("Max ORDER BY columns capped at {Max} (set MAX_ORDER_BY_COLUMNS to change)", _maxOrderByColumns);
     }
 
 
@@ -241,7 +246,9 @@ public class DataExtractor
             {
                 // Use all orderable columns (exclude BLOB, CLOB, and other non-orderable types)
                 var orderableColumns = columns
-                    .Where(c => IsOrderableColumnType(c.Type))
+                    .Where(c => IsOrderableColumnType(c.Type) && 
+                               !IsLobColumnType(c.Type) &&
+                               !CouldBeLobColumn(c.Name, c.Type))
                     .Select(c => c.Name)
                     .ToList();
                 
@@ -303,9 +310,14 @@ public class DataExtractor
         var nameUpper = columnName.ToUpperInvariant();
         var typeUpper = columnType.ToUpperInvariant();
         
-        if ((nameUpper.Contains("XML") || nameUpper.Contains("CLOB") || nameUpper.Contains("BLOB"))
-            && !typeUpper.Contains("VARCHAR") && !typeUpper.Contains("CHAR"))
+        if (nameUpper.Contains("XML") || nameUpper.Contains("CLOB") || nameUpper.Contains("BLOB"))
         {
+            if (typeUpper.Contains("VARCHAR2(") || typeUpper.Contains("VARCHAR(") ||
+                typeUpper.Contains("CHAR(") || typeUpper.Contains("NVARCHAR"))
+            {
+                return false;
+            }
+            
             Log.Debug("Column '{ColumnName}' ({ColumnType}) suspected as LOB based on name pattern", 
                 columnName, columnType);
             return true;
@@ -744,6 +756,11 @@ public class DataExtractor
                         {
                             row[i] = (double)floatDecVal;
                         }
+                        
+                        if (row[i] is string strVal && strVal.TrimStart().StartsWith("<"))
+                        {
+                            row[i] = NormalizeXmlString(strVal);
+                        }
                     }
                 }
                 catch (OverflowException)
@@ -854,16 +871,53 @@ public class DataExtractor
 
     private string BuildSelectQuery(string tableReference, TableMetadata metadata)
     {
-        var orderColumns = metadata.Columns
-            .Where(c => IsOrderableColumnType(c.Type) && !IsLobColumnType(c.Type))
+        var allOrderable = metadata.Columns
+            .Where(c => IsOrderableColumnType(c.Type) &&
+                       !IsLobColumnType(c.Type) &&
+                       !CouldBeLobColumn(c.Name, c.Type))
             .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        int cap = Math.Max(1, _maxOrderByColumns + _extraOrderColumns);
+        cap = Math.Min(cap, allOrderable.Count);
+
+        List<TableMetadata.ColumnMetadata> orderColumns;
+        if (allOrderable.Count <= cap)
+        {
+            orderColumns = allOrderable;
+        }
+        else
+        {
+            var pkNames = new HashSet<string>(metadata.PrimaryKeyColumns, StringComparer.OrdinalIgnoreCase);
+            var selected = new List<TableMetadata.ColumnMetadata>();
+
+            selected.AddRange(allOrderable.Where(c => pkNames.Contains(c.Name)).Take(cap));
+
+            if (selected.Count < cap)
+            {
+                selected.AddRange(allOrderable
+                    .Where(c => !pkNames.Contains(c.Name) &&
+                                IsNumericOrTimestampColumnType(c.Type.ToUpperInvariant()))
+                    .Take(cap - selected.Count));
+            }
+
+            if (selected.Count < cap)
+            {
+                var usedNames = new HashSet<string>(selected.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
+                selected.AddRange(allOrderable
+                    .Where(c => !usedNames.Contains(c.Name))
+                    .Take(cap - selected.Count));
+            }
+
+            orderColumns = selected;
+            Log.Information("Large table: capped ORDER BY at {Cap} of {Total} orderable columns: {Cols}",
+                cap, allOrderable.Count,
+                string.Join(", ", orderColumns.Select(c => c.Name)));
+        }
+
         string orderByClause = BuildOrderByClause(orderColumns);
         string columnList = BuildColumnList(metadata);
-        string sql = BuildFinalQuery(tableReference, columnList, orderByClause, metadata);
-
-        return sql;
+        return BuildFinalQuery(tableReference, columnList, orderByClause, orderColumns, metadata);
     }
 
     private List<TableMetadata.ColumnMetadata> BuildOrderColumnList(
@@ -981,54 +1035,10 @@ public class DataExtractor
         return "*";
     }
 
-    private string BuildFinalQuery(string tableReference, string columnList, string orderByClause, TableMetadata metadata)
+    private string BuildFinalQuery(string tableReference, string columnList, string orderByClause,
+                                   List<TableMetadata.ColumnMetadata> orderColumns, TableMetadata metadata)
     {
         var sql = new System.Text.StringBuilder($"SELECT {columnList} FROM {tableReference} ORDER BY {orderByClause}");
-
-        if (orderByClause != "1" && metadata.Columns.Count > 0)
-        {
-            // Get columns already in ORDER BY
-            var columnsInOrderBy = new HashSet<string>(
-                orderByClause.Split(',')
-                    .Select(part => part.Trim())
-                    .Select(part => part.Split(new[] { ' ', '(' }, StringSplitOptions.RemoveEmptyEntries)[0])
-                    .Select(col => col.Trim('"', '[', ']'))
-                    .Where(col => !string.IsNullOrEmpty(col)),
-                StringComparer.OrdinalIgnoreCase);
-
-            // Add remaining orderable columns (except LOBs) with proper normalization
-            bool useAggressiveNormalization = _extraOrderColumns > 0;
-            var remainingColumns = metadata.Columns
-                .Where(c => IsOrderableColumnType(c.Type) && 
-                           !IsLobColumnType(c.Type) &&
-                           !columnsInOrderBy.Contains(c.Name))
-                .Select(c => BuildOrderByExpression(c.Name, c.Type, useAggressiveNormalization))
-                .ToList();
-            
-            if (remainingColumns.Count > 0)
-            {
-                sql.Append(", ");
-                sql.Append(string.Join(", ", remainingColumns));
-                Log.Information("Added {Count} additional columns to ORDER BY for deterministic sorting", remainingColumns.Count);
-            }
-
-            // Final tie-breaker: concatenation of all orderable columns as text,
-            // using explicit type-aware formatting so Oracle and PostgreSQL produce
-            // the same string for the same row (e.g. dates must use the same format).
-            var tieBreakColumns = metadata.Columns
-                .Where(c => IsOrderableColumnType(c.Type) && !IsLobColumnType(c.Type))
-                .ToList();
-            
-            if (tieBreakColumns.Count > 0)
-            {
-                var parts = tieBreakColumns.Select(c => BuildNormalisedTextExpression(c.Name, c.Type));
-                string concat = string.Join(" || '|' || ", parts);
-
-                string hashTieBreaker = $", {concat} ASC";
-                
-                sql.Append(hashTieBreaker);
-            }
-        }
 
         if (_maxRowsPerTable > 0)
         {
@@ -1049,6 +1059,7 @@ public class DataExtractor
 
         if (_databaseType == DatabaseType.Oracle)
         {
+
             // DATE / TIMESTAMP → explicit ISO format matching PostgreSQL's text cast
             if (typeUpper == "DATE" || typeUpper.StartsWith("TIMESTAMP"))
                 return $"CASE WHEN {q} IS NULL THEN 'NULL' WHEN {q} < DATE '1900-01-01' THEN TO_CHAR({q}) ELSE TO_CHAR({q}, 'YYYY-MM-DD HH24:MI:SS.FF6') END";
@@ -1062,6 +1073,7 @@ public class DataExtractor
         }
         else // PostgreSQL
         {
+
             // timestamp / timestamptz → explicit ISO format
             if (typeUpper.Contains("TIMESTAMP") || typeUpper == "DATE")
                 return $"COALESCE(TO_CHAR({q}, 'YYYY-MM-DD HH24:MI:SS.US'), 'NULL')";
@@ -1122,5 +1134,56 @@ public class DataExtractor
             return $"\"{identifier.ToLowerInvariant()}\"";
         }
         return identifier;
+    }
+
+    private static string NormalizeXmlString(string xmlStr)
+    {
+        var cleaned = System.Text.RegularExpressions.Regex.Replace(xmlStr, @"<\?xml[^?]*\?>", "").Trim();
+        
+        try
+        {
+            var doc = XDocument.Parse(cleaned);
+            SortXmlElements(doc.Root);
+            var result = doc.ToString(SaveOptions.DisableFormatting);
+            result = System.Text.RegularExpressions.Regex.Replace(result, @">\s+<", "><");
+            Log.Debug("XML normalization succeeded, result length={Length}", result.Length);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("XML normalization failed ({Error}), using regex fallback. Input length={Length}, starts with: {Start}", 
+                ex.Message, cleaned.Length, cleaned.Length > 100 ? cleaned[..100] : cleaned);
+            return System.Text.RegularExpressions.Regex.Replace(cleaned, @">\s+<", "><");
+        }
+    }
+
+    private static void SortXmlElements(System.Xml.Linq.XElement? element)
+    {
+        if (element == null) return;
+        
+        foreach (var child in element.Elements().ToList())
+        {
+            SortXmlElements(child);
+        }
+        
+        var sortedChildren = element.Elements()
+            .OrderBy(e => e.Name.LocalName, StringComparer.Ordinal)
+            .ToList();
+        
+        var textNodes = element.Nodes().OfType<System.Xml.Linq.XText>()
+            .Where(t => !string.IsNullOrWhiteSpace(t.Value))
+            .ToList();
+        
+        element.RemoveNodes();
+        
+        foreach (var text in textNodes)
+        {
+            element.Add(text);
+        }
+        
+        foreach (var child in sortedChildren)
+        {
+            element.Add(child);
+        }
     }
 }
