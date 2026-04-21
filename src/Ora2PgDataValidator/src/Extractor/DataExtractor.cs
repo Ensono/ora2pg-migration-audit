@@ -336,6 +336,9 @@ public class DataExtractor
 
     private static bool IsNumericOrTimestampColumnType(string columnTypeUpper)
     {
+        if (columnTypeUpper.StartsWith("SYSTEM."))
+            columnTypeUpper = columnTypeUpper.Substring("SYSTEM.".Length);
+
         // Timestamps (highest priority for ordering)
         if (IsTimestampColumnType(columnTypeUpper))
             return true;
@@ -368,6 +371,8 @@ public class DataExtractor
     {
         if (columnTypeUpper == "FLOAT" ||
             columnTypeUpper == "REAL"  ||
+            columnTypeUpper == "DOUBLE" ||
+            columnTypeUpper == "SINGLE" ||
             columnTypeUpper == "BINARY_FLOAT" ||
             columnTypeUpper == "BINARY_DOUBLE")
         {
