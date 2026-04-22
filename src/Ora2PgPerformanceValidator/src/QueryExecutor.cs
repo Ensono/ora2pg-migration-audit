@@ -136,7 +136,9 @@ public class QueryExecutor
     private bool IsAggregateQuery(string queryName)
     {
         // Queries that return a single row with an aggregate COUNT value
-        return queryName.Contains("count", StringComparison.OrdinalIgnoreCase) ||
+        return queryName.StartsWith("count_", StringComparison.OrdinalIgnoreCase) ||
+               queryName.EndsWith("_count", StringComparison.OrdinalIgnoreCase) ||
+               queryName.Equals("count", StringComparison.OrdinalIgnoreCase) ||
                queryName.Contains("02_count_tables", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -195,10 +197,17 @@ public class QueryExecutor
                 // For aggregate queries (COUNT queries), read the value from first column instead of counting rows
                 if (isAggregateQuery && i == 0 && reader.FieldCount > 0 && !reader.IsDBNull(0))
                 {
-                    // Read the aggregate value (e.g., COUNT(*))
-                    currentRowCount = Convert.ToInt64(reader.GetValue(0));
-                    _logger.Debug("Oracle - Read aggregate value: {Count}", currentRowCount);
-                    break; // Only need the first row for aggregate queries
+                    try
+                    {
+                        currentRowCount = Convert.ToInt64(reader.GetValue(0));
+                        _logger.Debug("Oracle - Read aggregate value: {Count}", currentRowCount);
+                        break;
+                    }
+                    catch (FormatException ex)
+                    {
+                        _logger.Warning("Expected aggregate query but got non-numeric value: {Error}. Treating as regular query.", ex.Message);
+                        isAggregateQuery = false;
+                    }
                 }
                 
                 // If query returns table names, filter using ObjectFilter

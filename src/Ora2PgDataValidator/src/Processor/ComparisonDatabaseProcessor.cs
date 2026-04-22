@@ -1,4 +1,5 @@
 using System.Data;
+using System.Collections.Concurrent;
 using Serilog;
 using Ora2Pg.Common.Config;
 using Ora2Pg.Common.Connection;
@@ -19,6 +20,9 @@ public class ComparisonDatabaseProcessor
     private readonly int _fetchSize;
     private readonly string _oracleDatabase;
     private readonly string _postgresDatabase;
+    private readonly int _parallelTables;
+    private readonly int _debugRows;
+    private int _mismatchedRowsLogged = 0;
 
     public ComparisonDatabaseProcessor(DatabaseConnectionManager connectionManager)
     {
@@ -32,6 +36,14 @@ public class ComparisonDatabaseProcessor
         _fetchSize = props.GetInt("FETCH_SIZE", props.GetInt("fetch.size", 1000));
         _oracleDatabase = props.Get("ORACLE_SERVICE", "");
         _postgresDatabase = props.Get("POSTGRES_DB", "");
+
+        _parallelTables = props.GetInt("PARALLEL_TABLES", 4);
+        _debugRows = props.GetInt("DEBUG_ROWS", 0);
+        
+        if (_debugRows > 0)
+        {
+            Log.Information("Mismatch detail logging enabled: will show detailed comparison for first {N} mismatched rows", _debugRows);
+        }
     }
 
 
@@ -51,21 +63,26 @@ public class ComparisonDatabaseProcessor
         }
 
         Log.Information("Tables to compare: {Count}", tableMapping.Count);
+        Log.Information("Parallel processing: {Count} tables at a time", _parallelTables);
 
-        var allResults = new List<ComparisonResult>();
+        var allResults = new ConcurrentBag<ComparisonResult>();
         int successCount = 0;
         int failCount = 0;
 
-        foreach (var entry in tableMapping)
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = _parallelTables
+        };
+
+        var tableList = tableMapping.ToList();
+        
+        Parallel.ForEach(tableList, parallelOptions, entry =>
         {
             string oracleTable = entry.Key;
             string postgresTable = entry.Value;
 
-            Log.Information("");
-            Log.Information(new string('-', 80));
-            Log.Information("Comparing: {OracleTable} (Oracle) ↔ {PostgresTable} (PostgreSQL)",
-                           oracleTable, postgresTable);
-            Log.Information(new string('-', 80));
+            Log.Information("[{Thread}] Comparing: {OracleTable} ↔ {PostgresTable}",
+                           Environment.CurrentManagedThreadId, oracleTable, postgresTable);
 
             try
             {
@@ -74,31 +91,32 @@ public class ComparisonDatabaseProcessor
 
                 if (result.IsMatch)
                 {
-                    successCount++;
-                    Log.Information("✓ Tables match - migration validated successfully");
+                    Interlocked.Increment(ref successCount);
+                    Log.Information("[{Thread}] ✓ {Table} - match validated", 
+                        Environment.CurrentManagedThreadId, oracleTable);
                 }
                 else
                 {
-                    failCount++;
-                    Log.Warning("✗ Tables differ - migration validation failed");
-                    Log.Warning("  Missing in PostgreSQL: {Count} rows", result.MissingInTarget);
-                    Log.Warning("  Extra in PostgreSQL: {Count} rows", result.ExtraInTarget);
-                    Log.Warning("  Mismatched rows: {Count}", result.MismatchedRows);
+                    Interlocked.Increment(ref failCount);
+                    Log.Warning("[{Thread}] ✗ {Table} - validation failed (Missing: {Missing}, Extra: {Extra}, Mismatched: {Mismatched})",
+                        Environment.CurrentManagedThreadId, oracleTable,
+                        result.MissingInTarget, result.ExtraInTarget, result.MismatchedRows);
                 }
             }
             catch (Exception ex)
             {
-                failCount++;
-                Log.Error(ex, "✗ Failed to compare tables: {OracleTable} ↔ {PostgresTable}",
-                         oracleTable, postgresTable);
+                Interlocked.Increment(ref failCount);
+                Log.Error(ex, "[{Thread}] ✗ Failed to compare: {OracleTable} ↔ {PostgresTable}",
+                         Environment.CurrentManagedThreadId, oracleTable, postgresTable);
                 var errorResult = new ComparisonResult(oracleTable, postgresTable)
                 {
                     Error = ex.Message
                 };
                 allResults.Add(errorResult);
             }
-        }
+        });
 
+        var resultsList = allResults.ToList();
 
         Log.Information("");
         Log.Information(new string('=', 80));
@@ -138,15 +156,15 @@ public class ComparisonDatabaseProcessor
 
             var markdownWriter = new DataValidationMarkdownWriter();
             var markdownReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.md");
-            markdownWriter.WriteMarkdownReport(allResults, markdownReportPath, _oracleDatabase, _postgresDatabase);
+            markdownWriter.WriteMarkdownReport(resultsList, markdownReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Markdown report saved to: {ReportPath}", markdownReportPath);
 
-            string textReportPath = _reportWriter.GenerateDetailedReport(allResults, schemaPrefix, _oracleDatabase, _postgresDatabase);
+            string textReportPath = _reportWriter.GenerateDetailedReport(resultsList, schemaPrefix, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Text report saved to: {ReportPath}", textReportPath);
 
             var htmlWriter = new DataValidationHtmlWriter();
             var htmlReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.html");
-            htmlWriter.WriteHtmlReport(allResults, htmlReportPath, _oracleDatabase, _postgresDatabase);
+            htmlWriter.WriteHtmlReport(resultsList, htmlReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 HTML report saved to: {ReportPath}", htmlReportPath);
         }
         catch (Exception ex)
@@ -159,7 +177,7 @@ public class ComparisonDatabaseProcessor
         Log.Information("CSV hash files are available in the reports/ folder for manual review");
         Log.Information(new string('=', 80));
         
-        return (allResults, successCount, failCount);
+        return (resultsList, successCount, failCount);
     }
 
 
@@ -182,22 +200,33 @@ public class ComparisonDatabaseProcessor
         Log.Information("Objects to compare: {Total} ({Tables} tables, {Views} views)", 
             objectMapping.Count, tableCount, viewCount);
 
-        var allResults = new List<ComparisonResult>();
+        var allResults = new ConcurrentBag<ComparisonResult>();
         int successCount = 0;
         int failCount = 0;
 
-        foreach (var entry in objectMapping)
+        var objectList = objectMapping.ToList();
+
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = _parallelTables
+        };
+
+        Log.Information("Processing {Count} objects in parallel (max {Parallel} concurrent)", 
+            objectList.Count, _parallelTables);
+
+        Parallel.ForEach(objectList, parallelOptions, entry =>
         {
             string sourceObject = entry.Key;
             string targetObject = entry.Value.targetObject;
             DatabaseObjectType objectType = entry.Value.objectType;
 
             string objectTypeStr = objectType == DatabaseObjectType.Table ? "Table" : "View";
+            int threadId = Environment.CurrentManagedThreadId;
 
             Log.Information("");
             Log.Information(new string('-', 80));
-            Log.Information("Comparing {ObjectType}: {SourceObject} (Oracle) ↔ {TargetObject} (PostgreSQL)",
-                           objectTypeStr, sourceObject, targetObject);
+            Log.Information("[Thread {ThreadId}] Comparing {ObjectType}: {SourceObject} (Oracle) ↔ {TargetObject} (PostgreSQL)",
+                           threadId, objectTypeStr, sourceObject, targetObject);
             Log.Information(new string('-', 80));
 
             try
@@ -207,13 +236,15 @@ public class ComparisonDatabaseProcessor
 
                 if (result.IsMatch)
                 {
-                    successCount++;
-                    Log.Information("✓ {ObjectType}s match - migration validated successfully", objectTypeStr);
+                    Interlocked.Increment(ref successCount);
+                    Log.Information("[Thread {ThreadId}] ✓ {ObjectType}s match - migration validated successfully", 
+                        threadId, objectTypeStr);
                 }
                 else
                 {
-                    failCount++;
-                    Log.Warning("✗ {ObjectType}s differ - migration validation failed", objectTypeStr);
+                    Interlocked.Increment(ref failCount);
+                    Log.Warning("[Thread {ThreadId}] ✗ {ObjectType}s differ - migration validation failed", 
+                        threadId, objectTypeStr);
                     Log.Warning("  Missing in PostgreSQL: {Count} rows", result.MissingInTarget);
                     Log.Warning("  Extra in PostgreSQL: {Count} rows", result.ExtraInTarget);
                     Log.Warning("  Mismatched rows: {Count}", result.MismatchedRows);
@@ -221,16 +252,18 @@ public class ComparisonDatabaseProcessor
             }
             catch (Exception ex)
             {
-                failCount++;
-                Log.Error(ex, "✗ Failed to compare {ObjectType}s: {SourceObject} ↔ {TargetObject}",
-                         objectTypeStr, sourceObject, targetObject);
+                Interlocked.Increment(ref failCount);
+                Log.Error(ex, "[Thread {ThreadId}] ✗ Failed to compare {ObjectType}s: {SourceObject} ↔ {TargetObject}",
+                         threadId, objectTypeStr, sourceObject, targetObject);
                 var errorResult = new ComparisonResult(sourceObject, targetObject, objectType)
                 {
                     Error = ex.Message
                 };
                 allResults.Add(errorResult);
             }
-        }
+        });
+
+        var resultsList = allResults.ToList();
 
         Log.Information("");
         Log.Information(new string('=', 80));
@@ -271,15 +304,15 @@ public class ComparisonDatabaseProcessor
 
             var markdownWriter = new DataValidationMarkdownWriter();
             var markdownReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.md");
-            markdownWriter.WriteMarkdownReport(allResults, markdownReportPath, _oracleDatabase, _postgresDatabase);
+            markdownWriter.WriteMarkdownReport(resultsList, markdownReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Markdown report saved to: {ReportPath}", markdownReportPath);
 
-            string textReportPath = _reportWriter.GenerateDetailedReport(allResults, schemaPrefix, _oracleDatabase, _postgresDatabase);
+            string textReportPath = _reportWriter.GenerateDetailedReport(resultsList, schemaPrefix, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 Text report saved to: {ReportPath}", textReportPath);
 
             var htmlWriter = new DataValidationHtmlWriter();
             var htmlReportPath = Path.Combine(reportsDir, $"{schemaPrefix}data-fingerprint-validation-{timestamp}.html");
-            htmlWriter.WriteHtmlReport(allResults, htmlReportPath, _oracleDatabase, _postgresDatabase);
+            htmlWriter.WriteHtmlReport(resultsList, htmlReportPath, _oracleDatabase, _postgresDatabase);
             Log.Information("📄 HTML report saved to: {ReportPath}", htmlReportPath);
         }
         catch (Exception ex)
@@ -295,19 +328,69 @@ public class ComparisonDatabaseProcessor
 
     private ComparisonResult ProcessObjectPair(string sourceObject, string targetObject, DatabaseObjectType objectType)
     {
+        const int maxRetries = 3;
+        ComparisonResult? result = null;
+        
+        for (int attempt = 0; attempt <= maxRetries; attempt++)
+        {
+            int extraOrderColumns = attempt * 2; // 0, 2, 4, 6 extra columns per retry
+            
+            if (attempt > 0)
+            {
+                Log.Information("  🔄 Retry {Attempt}/{MaxRetries}: Adding {ExtraColumns} extra ORDER BY columns for {Object}",
+                    attempt, maxRetries, extraOrderColumns, sourceObject);
+            }
+            
+            result = ProcessObjectPairWithOrderColumns(sourceObject, targetObject, objectType, extraOrderColumns);
+            
+            if (!string.IsNullOrEmpty(result.Error))
+            {
+                Log.Warning("  ✗ Error occurred, not retrying: {Error}", result.Error);
+                break;
+            }
+            
+            if (result.IsMatch)
+            {
+                if (attempt > 0)
+                {
+                    Log.Information("  ✓ Retry successful! Ordering issue resolved with {ExtraColumns} extra columns", extraOrderColumns);
+                }
+                return result;
+            }
+            
+            // Only retry if likely ordering issue
+            bool isLikelyOrderingIssue = result.SourceRowCount == result.TargetRowCount &&
+                                          result.MismatchedRows > 0 &&
+                                          result.MissingInTarget == 0 &&
+                                          result.ExtraInTarget == 0;
+            
+            if (!isLikelyOrderingIssue || attempt >= maxRetries)
+            {
+                break;
+            }
+            
+            Log.Debug("  Row counts match but hashes differ - likely ordering issue, will retry");
+        }
+
+        return result ?? new ComparisonResult(sourceObject, targetObject, objectType) { Error = "Unknown error" };
+    }
+
+    private ComparisonResult ProcessObjectPairWithOrderColumns(string sourceObject, string targetObject, 
+        DatabaseObjectType objectType, int extraOrderColumns)
+    {
         var result = new ComparisonResult(sourceObject, targetObject, objectType);
 
         try
         {
             Log.Information("  Extracting Oracle data from {Object}...", sourceObject);
-            var (oracleHashes, oracleRows, oracleMetadata) = ExtractAndHashTable(DatabaseType.Oracle, sourceObject);
+            var (oracleHashes, oracleRows, oracleMetadata) = ExtractAndHashTable(DatabaseType.Oracle, sourceObject, extraOrderColumns);
             result.SourceRowCount = oracleHashes.Count;
             Log.Information("  ✓ Oracle: {Count} rows extracted", oracleHashes.Count);
 
             _csvWriter.WriteTableHashes(sourceObject, "Oracle", oracleHashes);
 
             Log.Information("  Extracting PostgreSQL data from {Object}...", targetObject);
-            var (postgresHashes, postgresRows, postgresMetadata) = ExtractAndHashTable(DatabaseType.PostgreSQL, targetObject);
+            var (postgresHashes, postgresRows, postgresMetadata) = ExtractAndHashTable(DatabaseType.PostgreSQL, targetObject, extraOrderColumns);
             result.TargetRowCount = postgresHashes.Count;
             Log.Information("  ✓ PostgreSQL: {Count} rows extracted", postgresHashes.Count);
 
@@ -333,19 +416,73 @@ public class ComparisonDatabaseProcessor
 
     private ComparisonResult ProcessTablePair(string oracleTable, string postgresTable)
     {
+        const int maxRetries = 3;
+        ComparisonResult? result = null;
+        
+        for (int attempt = 0; attempt <= maxRetries; attempt++)
+        {
+            int extraOrderColumns = attempt * 2; // 0, 2, 4, 6 extra columns per retry
+            
+            if (attempt > 0)
+            {
+                Log.Information("  🔄 Retry {Attempt}/{MaxRetries}: Adding {ExtraColumns} extra ORDER BY columns for {Table}",
+                    attempt, maxRetries, extraOrderColumns, oracleTable);
+            }
+            
+            result = ProcessTablePairWithOrderColumns(oracleTable, postgresTable, extraOrderColumns);
+            
+            if (!string.IsNullOrEmpty(result.Error))
+            {
+                Log.Warning("  ✗ Error occurred, not retrying: {Error}", result.Error);
+                break;
+            }
+            
+            if (result.IsMatch)
+            {
+                if (attempt > 0)
+                {
+                    Log.Information("  ✓ Retry successful! Ordering issue resolved with {ExtraColumns} extra columns", extraOrderColumns);
+                }
+                return result;
+            }
+
+            bool isLikelyOrderingIssue = result.SourceRowCount == result.TargetRowCount &&
+                                          result.MismatchedRows > 0 &&
+                                          result.MissingInTarget == 0 &&
+                                          result.ExtraInTarget == 0;
+            
+            if (!isLikelyOrderingIssue || attempt >= maxRetries)
+            {
+                if (attempt > 0)
+                {
+                    Log.Warning("  ✗ Retry {Attempt} did not resolve the issue (mismatched: {Mismatched})", 
+                        attempt, result.MismatchedRows);
+                }
+                break;
+            }
+            
+            Log.Debug("  Row counts match ({Count}) but {Mismatched} rows have different hashes - likely ordering issue, will retry",
+                result.SourceRowCount, result.MismatchedRows);
+        }
+
+        return result ?? new ComparisonResult(oracleTable, postgresTable) { Error = "Unknown error" };
+    }
+
+    private ComparisonResult ProcessTablePairWithOrderColumns(string oracleTable, string postgresTable, int extraOrderColumns)
+    {
         var result = new ComparisonResult(oracleTable, postgresTable);
 
         try
         {
             Log.Information("  Extracting Oracle data from {Table}...", oracleTable);
-            var (oracleHashes, oracleRows, oracleMetadata) = ExtractAndHashTable(DatabaseType.Oracle, oracleTable);
+            var (oracleHashes, oracleRows, oracleMetadata) = ExtractAndHashTable(DatabaseType.Oracle, oracleTable, extraOrderColumns);
             result.SourceRowCount = oracleHashes.Count;
             Log.Information("  ✓ Oracle: {Count} rows extracted", oracleHashes.Count);
 
             _csvWriter.WriteTableHashes(oracleTable, "Oracle", oracleHashes);
 
             Log.Information("  Extracting PostgreSQL data from {Table}...", postgresTable);
-            var (postgresHashes, postgresRows, postgresMetadata) = ExtractAndHashTable(DatabaseType.PostgreSQL, postgresTable);
+            var (postgresHashes, postgresRows, postgresMetadata) = ExtractAndHashTable(DatabaseType.PostgreSQL, postgresTable, extraOrderColumns);
             result.TargetRowCount = postgresHashes.Count;
             Log.Information("  ✓ PostgreSQL: {Count} rows extracted", postgresHashes.Count);
 
@@ -371,7 +508,7 @@ public class ComparisonDatabaseProcessor
 
     private (Dictionary<string, string> hashes,
              Dictionary<string, Dictionary<string, object?>> rowData,
-             TableMetadata metadata) ExtractAndHashTable(DatabaseType dbType, string tableRef)
+             TableMetadata metadata) ExtractAndHashTable(DatabaseType dbType, string tableRef, int extraOrderColumns = 0)
     {
         var hashes = new Dictionary<string, string>();
         var rowData = new Dictionary<string, Dictionary<string, object?>>();
@@ -379,7 +516,7 @@ public class ComparisonDatabaseProcessor
         using var connection = _connectionManager.GetConnection(dbType);
         connection.Open();
 
-        var extractor = new DataExtractor(connection, dbType);
+        var extractor = new DataExtractor(connection, dbType, extraOrderColumns);
         var metadata = extractor.GetTableMetadata(tableRef);
 
         int rowNumber = 0;
@@ -395,7 +532,7 @@ public class ComparisonDatabaseProcessor
                     rowDict[metadata.Columns[i].Name] = row[i];
                 }
 
-                string hash = HashGenerator.GenerateHash(rowDict, _hashAlgorithm);
+                string hash = HashGenerator.GenerateHash(rowDict, _hashAlgorithm, $"{dbType}:{tableRef}");
                 hashes[rowNumber.ToString()] = hash;
                 rowData[rowNumber.ToString()] = rowDict;
             }
@@ -437,6 +574,22 @@ public class ComparisonDatabaseProcessor
                     var postgresPkValues = ExtractPrimaryKeyValues(postgresRows[oracleEntry.Key], postgresMetadata.PrimaryKeyColumns);
                     
                     result.AddMismatchedRow(rowId, oracleHash, postgresHash, oraclePkValues, postgresPkValues);
+
+                    // Log detailed comparison for mismatched rows (limited by DEBUG_ROWS)
+                    if (_debugRows > 0 && _mismatchedRowsLogged < _debugRows)
+                    {
+                        int logged = System.Threading.Interlocked.Increment(ref _mismatchedRowsLogged);
+                        if (logged <= _debugRows)
+                        {
+                            Log.Warning("[MISMATCH] Row {RowId} - Oracle hash: {OracleHash}, PostgreSQL hash: {PostgresHash}",
+                                rowId, oracleHash, postgresHash);
+                            
+                            var oracleData = oracleRows[oracleEntry.Key];
+                            var postgresData = postgresRows[oracleEntry.Key];
+                            
+                            LogRowComparison(rowId, oracleData, postgresData, oracleMetadata.Columns);
+                        }
+                    }
                 }
             }
             else
@@ -467,6 +620,67 @@ public class ComparisonDatabaseProcessor
 
         Log.Information("  Comparison: {Matching} matching, {Mismatched} mismatched, {Missing} missing, {Extra} extra",
                        matching, mismatched, missing, extra);
+    }
+
+    private void LogRowComparison(int rowId, 
+                                  Dictionary<string, object?> oracleData,
+                                  Dictionary<string, object?> postgresData,
+                                  List<TableMetadata.ColumnMetadata> columns)
+    {
+        var differences = new List<string>();
+        int oracleNullCount = 0;
+        int postgresNullCount = 0;
+        
+        foreach (var col in columns)
+        {
+            var oracleValue = oracleData.GetValueOrDefault(col.Name);
+            
+            var pgKey = postgresData.Keys.FirstOrDefault(k => k.Equals(col.Name, StringComparison.OrdinalIgnoreCase));
+            var postgresValue = pgKey != null ? postgresData[pgKey] : null;
+            
+            if (oracleValue == null) oracleNullCount++;
+            if (postgresValue == null) postgresNullCount++;
+            
+            var oracleStr = HashGenerator.ConvertValueToStringPublic(oracleValue);
+            var postgresStr = HashGenerator.ConvertValueToStringPublic(postgresValue);
+            
+            if (oracleStr != postgresStr)
+            {
+                differences.Add($"{col.Name}: Oracle[{oracleValue?.GetType().Name ?? "null"}]={oracleStr} vs PG[{postgresValue?.GetType().Name ?? "null"}]={postgresStr}");
+            }
+        }
+        
+        if (differences.Count > 0)
+        {
+            Log.Warning("[MISMATCH] Row {RowId} differences: ({OracleNulls} Oracle NULLs, {PgNulls} PG NULLs, {TotalDiffs} total differences)",
+                rowId, oracleNullCount, postgresNullCount, differences.Count);
+            
+            if (oracleNullCount == 0 && postgresNullCount >= columns.Count * 0.8)
+            {
+                Log.Error("  ⚠️  PostgreSQL row is mostly NULL while Oracle has data — ROW ORDERING MISMATCH");
+                Log.Error("  ⚠️  The ORDER BY clause is producing different row sequences between Oracle and PostgreSQL");
+            }
+            else if (postgresNullCount == 0 && oracleNullCount >= columns.Count * 0.8)
+            {
+                Log.Error("  ⚠️  Oracle row is mostly NULL while PostgreSQL has data — ROW ORDERING MISMATCH");
+                Log.Error("  ⚠️  The ORDER BY clause is producing different row sequences between Oracle and PostgreSQL");
+            }
+            
+            // Only show first 10 differences to avoid log spam
+            foreach (var diff in differences.Take(10))
+            {
+                Log.Warning("  • {Difference}", diff);
+            }
+            
+            if (differences.Count > 10)
+            {
+                Log.Warning("  ... and {More} more differences", differences.Count - 10);
+            }
+        }
+        else
+        {
+            Log.Warning("[MISMATCH] Row {RowId} - No column differences found but hashes differ (ordering issue?)", rowId);
+        }
     }
     
     private Dictionary<string, object?> ExtractPrimaryKeyValues(Dictionary<string, object?> row, List<string> primaryKeyColumns)

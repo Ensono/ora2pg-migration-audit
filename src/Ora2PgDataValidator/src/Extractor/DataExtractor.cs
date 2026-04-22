@@ -1,4 +1,5 @@
 using System.Data;
+using System.Xml.Linq;
 using Serilog;
 using Ora2Pg.Common.Config;
 using Ora2Pg.Common.Connection;
@@ -13,11 +14,36 @@ public class DataExtractor
     private readonly int _maxRowsPerTable;
     private readonly int _commandTimeoutSeconds;
     private readonly HashSet<string> _columnsToSkip;
+    private readonly bool _skipLobColumns;
+    private readonly int _lobSizeLimit;
+    private readonly int _extraOrderColumns;  // Additional columns to add for retry logic
+    private readonly int _maxOrderByColumns;  // Hard cap on ORDER BY columns to avoid temp_file_limit
+    private readonly TimeZoneInfo _oracleTz;  // Timezone for TIMESTAMP WITH TIME ZONE conversion (configurable via ORACLE_TIMEZONE)
 
-    public DataExtractor(IDbConnection connection, DatabaseType databaseType)
+    private readonly Dictionary<string, TableMetadata> _metadataCache = new(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly HashSet<string> LobColumnTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "BLOB", "CLOB", "NCLOB", "BFILE",                              // Oracle LOB types (exact)
+        "LONG RAW", "RAW", "LONG",                                     // Oracle LONG types  
+        "XMLTYPE",                                                      // Oracle XML type (also LOB)
+        "BYTEA", "OID", "TEXT",                                        // PostgreSQL binary/text types
+        "SYSTEM.BYTE[]", "BYTE[]",                                     // .NET binary representations
+        "Oracle.ManagedDataAccess.Types.OracleClob",                   // Oracle ADO.NET CLOB type
+        "Oracle.ManagedDataAccess.Types.OracleBlob",                   // Oracle ADO.NET BLOB type
+        "Npgsql.NpgsqlTypes.NpgsqlDbType"                              // PostgreSQL type namespace
+    };
+
+    private static readonly string[] LobTypePatterns =
+    {
+        "CLOB", "BLOB", "BFILE", "XMLTYPE", "BYTEA", "LONG RAW", "BYTE[]", "OracleClob", "OracleBlob"
+    };
+
+    public DataExtractor(IDbConnection connection, DatabaseType databaseType, int extraOrderColumns = 0)
     {
         _connection = connection;
         _databaseType = databaseType;
+        _extraOrderColumns = extraOrderColumns;
 
         var props = ApplicationProperties.Instance;
         _maxRowsPerTable = props.GetInt("MAX_ROWS_PER_TABLE",
@@ -25,6 +51,35 @@ public class DataExtractor
 
         _commandTimeoutSeconds = props.GetInt("COMMAND_TIMEOUT_SECONDS",
                                              props.GetInt("command.timeout.seconds", 300));
+        
+        _skipLobColumns = props.Get("SKIP_LOB_COLUMNS",
+                                    props.Get("SKIP_BLOB_COLUMNS", "false"))
+                               .Equals("true", StringComparison.OrdinalIgnoreCase);
+        if (_skipLobColumns)
+        {
+            Log.Information("LOB column skipping enabled - BLOB/CLOB/bytea/text columns will be excluded from data extraction");
+        }
+        
+        _lobSizeLimit = props.GetInt("LOB_SIZE_LIMIT", props.GetInt("BLOB_SIZE_LIMIT", 0));
+        
+        // BLOB -> RAW: max 2000 bytes in Oracle SQL; CLOB -> VARCHAR2: max 4000 bytes
+        // Validate against the higher CLOB limit; BLOB will be further capped to 2000 internally
+        const int MaxLobLimit = 4000;
+        if (_lobSizeLimit > MaxLobLimit)
+        {
+            Log.Error("LOB_SIZE_LIMIT={Limit} exceeds maximum of {Max} bytes. " +
+                     "Oracle DBMS_LOB.SUBSTR returns VARCHAR2 (for CLOB, max {Max} bytes) or RAW (for BLOB, max 2000 bytes) in SQL context. " +
+                     "Please set LOB_SIZE_LIMIT to {Max} or less, or use SKIP_LOB_COLUMNS=true.",
+                     _lobSizeLimit, MaxLobLimit, MaxLobLimit);
+            throw new InvalidOperationException(
+                $"LOB_SIZE_LIMIT={_lobSizeLimit} exceeds maximum of {MaxLobLimit} bytes. " +
+                $"Set LOB_SIZE_LIMIT to {MaxLobLimit} or less (BLOB columns are capped at 2000), or use SKIP_LOB_COLUMNS=true.");
+        }
+        
+        if (_lobSizeLimit > 0 && !_skipLobColumns)
+        {
+            Log.Information("LOB size limit enabled: Only first {Limit} bytes will be fetched from BLOB/CLOB columns", _lobSizeLimit);
+        }
 
         string skipColumnsConfig = databaseType == DatabaseType.PostgreSQL
             ? props.Get("POSTGRES_SKIP_COLUMNS", "")
@@ -59,11 +114,38 @@ public class DataExtractor
         }
 
         Log.Information("Database command timeout set to {TimeoutSeconds} seconds", _commandTimeoutSeconds);
+
+        _maxOrderByColumns = props.GetInt("MAX_ORDER_BY_COLUMNS", 6);
+        Log.Information("Max ORDER BY columns capped at {Max} (set MAX_ORDER_BY_COLUMNS to change)", _maxOrderByColumns);
+
+        // Configurable timezone for Oracle TIMESTAMP WITH TIME ZONE columns.
+        // Oracle drivers return these as plain DateTime (no offset), so we need to know
+        // the source database timezone to convert to UTC for comparison with PostgreSQL.
+        // Default: America/New_York (Eastern). Set ORACLE_TIMEZONE in .env to override.
+        string oracleTzId = props.Get("ORACLE_TIMEZONE", "");
+        if (string.IsNullOrWhiteSpace(oracleTzId))
+            oracleTzId = OperatingSystem.IsWindows() ? "Eastern Standard Time" : "America/New_York";
+        try
+        {
+            _oracleTz = TimeZoneInfo.FindSystemTimeZoneById(oracleTzId);
+            Log.Information("Oracle TIMESTAMP WITH TIME ZONE will be converted from '{TimeZone}' to UTC (set ORACLE_TIMEZONE to change)", oracleTzId);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            Log.Warning("ORACLE_TIMEZONE='{TimeZone}' not found on this system; falling back to UTC (no conversion).", oracleTzId);
+            _oracleTz = TimeZoneInfo.Utc;
+        }
     }
 
 
     public TableMetadata GetTableMetadata(string tableReference)
     {
+        if (_metadataCache.TryGetValue(tableReference, out var cached))
+        {
+            Log.Debug("Returning cached metadata for table: {TableReference}", tableReference);
+            return cached;
+        }
+
         Log.Information("Retrieving metadata for table: {TableReference}", tableReference);
 
         string? schema = null;
@@ -79,6 +161,10 @@ public class DataExtractor
         var columns = new List<TableMetadata.ColumnMetadata>();
         var primaryKeyColumns = new List<string>();
 
+        var oracleNativeTypes = _databaseType == DatabaseType.Oracle && schema != null
+            ? GetOracleNativeSqlTypes(schema, tableName)
+            : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = $"SELECT * FROM {tableReference} WHERE 1=0"; // Get schema only, no data
 
@@ -90,16 +176,44 @@ public class DataExtractor
             {
                 int position = 1;
                 int skippedCount = 0;
+                int blobSkippedCount = 0;
                 foreach (DataRow row in schemaTable.Rows)
                 {
                     string columnName = row["ColumnName"].ToString() ?? "";
-                    string columnType = row["DataType"].ToString() ?? "";
+                    
+                    string nativeTypeName = schemaTable.Columns.Contains("DataTypeName") && row["DataTypeName"] != DBNull.Value
+                        ? row["DataTypeName"].ToString() ?? ""
+                        : "";
+                    string dotNetTypeName = row["DataType"] != DBNull.Value ? row["DataType"].ToString() ?? "" : "";
+
+                    string columnType;
+                    if (oracleNativeTypes.TryGetValue(columnName, out var oracleSqlType) && !string.IsNullOrWhiteSpace(oracleSqlType))
+                    {
+                        columnType = oracleSqlType;
+                    }
+                    else
+                    {
+                        columnType = !string.IsNullOrWhiteSpace(nativeTypeName) ? nativeTypeName : dotNetTypeName;
+                    }
+                    
                     bool isKey = row["IsKey"] != DBNull.Value && (bool)row["IsKey"];
+                    
+                    Log.Debug("Column schema: {ColumnName} = native='{NativeType}' dotnet='{DotNetType}' -> using='{ColumnType}', IsLob={IsLob}", 
+                        columnName, nativeTypeName, dotNetTypeName, columnType, IsLobColumnType(columnType));
 
                     if (_columnsToSkip.Contains(columnName))
                     {
                         skippedCount++;
                         Log.Debug("Skipping column: {ColumnName} in table {TableReference}", columnName, tableReference);
+                        continue;
+                    }
+                    
+                    // Skip LOB columns if SKIP_LOB_COLUMNS is enabled
+                    if (_skipLobColumns && (IsLobColumnType(columnType) || CouldBeLobColumn(columnName, columnType)))
+                    {
+                        blobSkippedCount++;
+                        Log.Information("Skipping LOB column: {ColumnName} ({ColumnType}) in table {TableReference} (SKIP_LOB_COLUMNS=true)", 
+                            columnName, columnType, tableReference);
                         continue;
                     }
 
@@ -115,7 +229,13 @@ public class DataExtractor
 
                 if (skippedCount > 0)
                 {
-                    Log.Information("Skipped {Count} column(s) in table {TableReference}", skippedCount, tableReference);
+                    Log.Information("Skipped {Count} configured column(s) in table {TableReference}", skippedCount, tableReference);
+                }
+                
+                if (blobSkippedCount > 0)
+                {
+                    Log.Information("Skipped {Count} BLOB/binary column(s) in table {TableReference} (SKIP_BLOB_COLUMNS=true)", 
+                        blobSkippedCount, tableReference);
                 }
             }
         }
@@ -145,7 +265,9 @@ public class DataExtractor
             {
                 // Use all orderable columns (exclude BLOB, CLOB, and other non-orderable types)
                 var orderableColumns = columns
-                    .Where(c => IsOrderableColumnType(c.Type))
+                    .Where(c => IsOrderableColumnType(c.Type) && 
+                               !IsLobColumnType(c.Type) &&
+                               !CouldBeLobColumn(c.Name, c.Type))
                     .Select(c => c.Name)
                     .ToList();
                 
@@ -171,7 +293,119 @@ public class DataExtractor
             Log.Information("Order by columns: {OrderColumns}", string.Join(", ", primaryKeyColumns));
         }
 
-        return new TableMetadata(tableReference, columns, primaryKeyColumns);
+        var metadata = new TableMetadata(tableReference, columns, primaryKeyColumns);
+        _metadataCache[tableReference] = metadata;
+        return metadata;
+    }
+
+    private bool IsLobColumnType(string columnType)
+    {
+        if (string.IsNullOrWhiteSpace(columnType))
+        {
+            return false;
+        }
+
+        if (LobColumnTypes.Contains(columnType))
+        {
+            Log.Debug("Column type '{ColumnType}' matched LOB exact type", columnType);
+            return true;
+        }
+
+        foreach (var pattern in LobTypePatterns)
+        {
+            if (columnType.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                Log.Debug("Column type '{ColumnType}' matched LOB pattern '{Pattern}'", columnType, pattern);
+                return true;
+            }
+        }
+        
+        Log.Debug("Column type '{ColumnType}' is NOT a LOB", columnType);
+        return false;
+    }
+
+    private bool CouldBeLobColumn(string columnName, string columnType)
+    {
+        var nameUpper = columnName.ToUpperInvariant();
+        var typeUpper = columnType.ToUpperInvariant();
+        
+        if (nameUpper.Contains("XML") || nameUpper.Contains("CLOB") || nameUpper.Contains("BLOB"))
+        {
+            if (typeUpper.Contains("VARCHAR2(") || typeUpper.Contains("VARCHAR(") ||
+                typeUpper.Contains("CHAR(") || typeUpper.Contains("NVARCHAR"))
+            {
+                return false;
+            }
+            
+            Log.Debug("Column '{ColumnName}' ({ColumnType}) suspected as LOB based on name pattern", 
+                columnName, columnType);
+            return true;
+        }
+        
+        return false;
+    }
+
+    private static bool IsTimestampColumnType(string columnTypeUpper)
+    {
+        return columnTypeUpper.Contains("TIMESTAMP") ||
+               columnTypeUpper.Contains("DATE") ||
+               columnTypeUpper == "DATE" ||
+               columnTypeUpper.StartsWith("TIMESTAMP");
+    }
+
+    private static bool IsNumericOrTimestampColumnType(string columnTypeUpper)
+    {
+        if (columnTypeUpper.StartsWith("SYSTEM."))
+            columnTypeUpper = columnTypeUpper.Substring("SYSTEM.".Length);
+
+        // Timestamps (highest priority for ordering)
+        if (IsTimestampColumnType(columnTypeUpper))
+            return true;
+        
+        // Integer types (perfect cross-DB consistency)
+        if (columnTypeUpper.Contains("INT") || 
+            columnTypeUpper.StartsWith("NUMBER") || 
+            columnTypeUpper == "BIGINT" || 
+            columnTypeUpper == "SMALLINT" || 
+            columnTypeUpper == "TINYINT" ||
+            columnTypeUpper.Contains("SERIAL"))
+            return true;
+        
+        // Decimal/numeric types (consistent if precision matches)
+        if (columnTypeUpper == "NUMERIC" || 
+            columnTypeUpper.StartsWith("NUMERIC(") ||
+            columnTypeUpper == "DECIMAL" ||
+            columnTypeUpper.StartsWith("DECIMAL(") ||
+            columnTypeUpper.StartsWith("NUMBER("))
+            return true;
+        
+        // Float types
+        if (IsFloatingPointColumnType(columnTypeUpper))
+            return true;
+        
+        return false;
+    }
+
+    private static bool IsFloatingPointColumnType(string columnTypeUpper)
+    {
+        if (columnTypeUpper == "FLOAT" ||
+            columnTypeUpper == "REAL"  ||
+            columnTypeUpper == "DOUBLE" ||
+            columnTypeUpper == "SINGLE" ||
+            columnTypeUpper == "BINARY_FLOAT" ||
+            columnTypeUpper == "BINARY_DOUBLE")
+        {
+            return true;
+        }
+
+        if (columnTypeUpper.StartsWith("FLOAT(") ||
+            columnTypeUpper.StartsWith("BINARY_FLOAT(") ||
+            columnTypeUpper.StartsWith("BINARY_DOUBLE("))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private bool IsOrderableColumnType(string columnType)
@@ -191,6 +425,7 @@ public class DataExtractor
             "NCLOB",          // Oracle national character large object
             "BFILE",          // Oracle binary file
             "BYTEA",          // PostgreSQL binary data
+            "TEXT",           // PostgreSQL large text (can be huge like CLOB)
             "JSON",           // JSON data
             "JSONB",          // PostgreSQL binary JSON
             "XML",            // XML data
@@ -216,6 +451,157 @@ public class DataExtractor
         }
 
         return true;
+    }
+
+    private class ColumnStats
+    {
+        public string ColumnName { get; set; } = "";
+        public long DistinctCount { get; set; }
+        public long NullCount { get; set; }
+        public double Selectivity => DistinctCount > 0 ? (double)DistinctCount : 0;
+    }
+
+    private List<ColumnStats> GetColumnStatistics(string tableReference, List<TableMetadata.ColumnMetadata> columns)
+    {
+        var stats = new List<ColumnStats>();
+        
+        if (columns.Count == 0)
+        {
+            return stats;
+        }
+
+        try
+        {
+            // Only analyze orderable columns (excludes LOBs/CLOB/BLOB/TEXT which cause ORA-22835)
+            var orderableColumns = columns.Where(c => IsOrderableColumnType(c.Type)).ToList();
+            
+            if (orderableColumns.Count == 0)
+            {
+                return stats;
+            }
+
+            // Limit to first 10 columns to avoid query timeout
+            var columnsToAnalyze = orderableColumns.Take(10).ToList();
+            
+            Log.Debug("Gathering statistics for {Count} orderable columns (excluding LOBs)", columnsToAnalyze.Count);
+            
+            foreach (var col in columnsToAnalyze)
+            {
+                try
+                {
+                    var quotedCol = QuoteIdentifier(col.Name);
+                    var sql = _databaseType == DatabaseType.Oracle
+                        ? $"SELECT COUNT(DISTINCT {quotedCol}) as distinct_count, " +
+                          $"SUM(CASE WHEN {quotedCol} IS NULL THEN 1 ELSE 0 END) as null_count " +
+                          $"FROM {tableReference} WHERE ROWNUM <= 10000"
+                        : $"SELECT COUNT(DISTINCT {quotedCol}) as distinct_count, " +
+                          $"COUNT(*) FILTER (WHERE {quotedCol} IS NULL) as null_count " +
+                          $"FROM {tableReference} LIMIT 10000";
+
+                    using var cmd = _connection.CreateCommand();
+                    cmd.CommandText = sql;
+                    cmd.CommandTimeout = 30; // Short timeout for stats gathering
+                    
+                    using var reader = cmd.ExecuteReader();
+                    if (reader.Read())
+                    {
+                        stats.Add(new ColumnStats
+                        {
+                            ColumnName = col.Name,
+                            DistinctCount = Convert.ToInt64(reader["distinct_count"]),
+                            NullCount = Convert.ToInt64(reader["null_count"])
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug("Could not get stats for column {Column}: {Error}", col.Name, ex.Message);
+                    // If stats fail for a column, give it neutral stats
+                    stats.Add(new ColumnStats
+                    {
+                        ColumnName = col.Name,
+                        DistinctCount = 100,
+                        NullCount = 0
+                    });
+                }
+            }
+
+            Log.Debug("Column statistics for {Table}: {Stats}", 
+                tableReference,
+                string.Join(", ", stats.Select(s => $"{s.ColumnName}(distinct={s.DistinctCount}, nulls={s.NullCount})")));
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("Could not gather column statistics for {Table}: {Error}", tableReference, ex.Message);
+        }
+
+        return stats;
+    }
+
+
+    private Dictionary<string, string> GetOracleNativeSqlTypes(string schema, string tableName)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var cleanSchema    = schema.Trim('"').ToUpper();
+            var cleanTableName = tableName.Trim('"').ToUpper();
+
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT column_name, data_type
+                FROM all_columns
+                WHERE owner      = :schema_name
+                  AND table_name = :table_name";
+
+            var schemaParam = cmd.CreateParameter();
+            schemaParam.ParameterName = "schema_name";
+            schemaParam.Value = cleanSchema;
+            cmd.Parameters.Add(schemaParam);
+
+            var tableParam = cmd.CreateParameter();
+            tableParam.ParameterName = "table_name";
+            tableParam.Value = cleanTableName;
+            cmd.Parameters.Add(tableParam);
+
+            cmd.CommandTimeout = _commandTimeoutSeconds;
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var colName  = reader.GetString(0);
+                var dataType = reader.GetString(1);
+                result[colName] = dataType;
+            }
+
+            if (result.Count == 0)
+            {
+                Log.Warning("GetOracleNativeSqlTypes returned 0 rows for {Schema}.{Table} — " +
+                            "check that the connecting user has SELECT on ALL_COLUMNS and the " +
+                            "schema/table names are correct. Float columns will not be normalised.",
+                            cleanSchema, cleanTableName);
+            }
+            else
+            {
+                Log.Information("Loaded {Count} Oracle native SQL types for {Schema}.{Table} — " +
+                                "float columns: {FloatCols}",
+                                result.Count, cleanSchema, cleanTableName,
+                                string.Join(", ", result.Where(kv =>
+                                    kv.Value.Equals("FLOAT", StringComparison.OrdinalIgnoreCase) ||
+                                    kv.Value.Equals("BINARY_FLOAT", StringComparison.OrdinalIgnoreCase) ||
+                                    kv.Value.Equals("BINARY_DOUBLE", StringComparison.OrdinalIgnoreCase) ||
+                                    kv.Value.Equals("REAL", StringComparison.OrdinalIgnoreCase))
+                                .Select(kv => $"{kv.Key}={kv.Value}")));
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("Could not load Oracle native SQL types for {Schema}.{Table}: {Error}. " +
+                        "Float columns may not be normalised correctly.",
+                        schema, tableName, ex.Message);
+        }
+
+        return result;
     }
 
 
@@ -324,10 +710,13 @@ public class DataExtractor
     }
 
 
+    private static bool IsTimestampWithTimeZoneType(string columnTypeUpper) =>
+        columnTypeUpper.Contains("WITH TIME ZONE") ||
+        columnTypeUpper.Contains("WITH LOCAL TIME ZONE");
+
     private void ProcessRows(string tableReference, Action<List<object?[]>> consumer, int batchSize)
     {
         var metadata = GetTableMetadata(tableReference);
-
         string sql = BuildSelectQuery(tableReference, metadata);
 
         using var cmd = _connection.CreateCommand();
@@ -342,21 +731,81 @@ public class DataExtractor
 
         while (reader.Read())
         {
-
             if (_maxRowsPerTable > 0 && rowCount >= _maxRowsPerTable)
             {
-                Log.Warning("Reached row limit of {MaxRows} for table {TableReference}, stopping extraction",
-                          _maxRowsPerTable, tableReference);
                 break;
             }
 
             var row = new object?[columnCount];
             for (int i = 0; i < columnCount; i++)
             {
-                row[i] = reader.GetValue(i);
-                if (row[i] == DBNull.Value)
+                try
+                {
+                    row[i] = reader.GetValue(i);
+                    if (row[i] == DBNull.Value)
+                    {
+                        row[i] = null;
+                    }
+                    else if (i < metadata.Columns.Count)
+                    {
+                        var colTypeUpper = (metadata.Columns[i].Type ?? "").ToUpperInvariant();
+
+                        // Convert Oracle TIMESTAMP WITH TIME ZONE from EST to UTC
+                        if (_databaseType == DatabaseType.Oracle && 
+                            row[i] is DateTime oracleDt && 
+                            IsTimestampWithTimeZoneType(colTypeUpper))
+                        {
+                            try
+                            {
+                                row[i] = TimeZoneInfo.ConvertTimeToUtc(
+                                    DateTime.SpecifyKind(oracleDt, DateTimeKind.Unspecified),
+                                    _oracleTz);
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Warning("Could not convert column {Name} value {Value} from EST to UTC ({Error}). Using value as-is.",
+                                    metadata.Columns[i].Name, oracleDt, ex.Message);
+                                row[i] = DateTime.SpecifyKind(oracleDt, DateTimeKind.Utc);
+                            }
+                        }
+
+                        // Convert Oracle FLOAT decimal to double for consistency with PostgreSQL
+                        if (row[i] is decimal floatDecVal && IsFloatingPointColumnType(colTypeUpper))
+                        {
+                            row[i] = (double)floatDecVal;
+                        }
+                        
+                        if (row[i] is string strVal && strVal.TrimStart().StartsWith("<"))
+                        {
+                            row[i] = NormalizeXmlString(strVal);
+                        }
+                    }
+                }
+                catch (OverflowException)
+                {
+                    if (i < metadata.Columns.Count && IsFloatingPointColumnType(metadata.Columns[i].Type.ToUpperInvariant()))
+                    {
+                        try
+                        {
+                            row[i] = reader.GetDouble(i);
+                        }
+                        catch
+                        {
+                            row[i] = null;
+                            Log.Warning("Column {Name} value overflow, setting to NULL", reader.GetName(i));
+                        }
+                    }
+                    else
+                    {
+                        row[i] = null;
+                        Log.Warning("Column {Name} value overflow, setting to NULL", reader.GetName(i));
+                    }
+                }
+                catch (ArgumentOutOfRangeException ex)
                 {
                     row[i] = null;
+                    Log.Warning("Column {Name} has un-representable DateTime value ({Error}), setting to NULL", 
+                        reader.GetName(i), ex.Message);
                 }
             }
             batch.Add(row);
@@ -381,78 +830,379 @@ public class DataExtractor
         }
     }
 
-
-    private string BuildSelectQuery(string tableReference, TableMetadata metadata)
+    private string BuildOrderByExpression(string columnName, string columnType, bool useAggressiveNormalization = false)
     {
-        string orderByClause;
-        if (metadata.PrimaryKeyColumns.Count > 0)
+        var quotedName = QuoteIdentifier(columnName);
+        var typeUpper = (columnType ?? "").ToUpperInvariant();
+        
+        Log.Debug("BuildOrderByExpression: column={Column}, type={Type}, dbType={DbType}, aggressive={Aggressive}", 
+            columnName, columnType, _databaseType, useAggressiveNormalization);
+        
+        bool isLobType = typeUpper.Contains("CLOB") || typeUpper.Contains("NCLOB") ||
+                         typeUpper.Contains("BLOB") || typeUpper.Contains("BYTEA") ||
+                         typeUpper.Contains("TEXT") && _databaseType == DatabaseType.PostgreSQL;
+        
+        if (isLobType)
         {
-            orderByClause = string.Join(", ", metadata.PrimaryKeyColumns.Select(pk => $"{QuoteIdentifier(pk)} DESC"));
-            Log.Debug("Ordering by primary key columns (DESC): {OrderBy}", orderByClause);
+            Log.Warning("LOB column {Column} ({Type}) should not be used in ORDER BY - using constant instead", 
+                columnName, columnType);
+            return "1"; // Fallback to constant
         }
-        else
+        
+        bool isStringType = typeUpper.Contains("CHAR") || typeUpper.Contains("STRING") || 
+                           typeUpper.Contains("VARCHAR");
+        
+        if (isStringType)
         {
-            var idColumn = metadata.Columns.FirstOrDefault(c =>
-                c.Name.Equals("id", StringComparison.OrdinalIgnoreCase) ||
-                c.Name.Equals("ID", StringComparison.OrdinalIgnoreCase) ||
-                c.Name.EndsWith("_id", StringComparison.OrdinalIgnoreCase) ||
-                c.Name.EndsWith("_ID", StringComparison.OrdinalIgnoreCase));
-            
-            if (idColumn != null)
+            if (_databaseType == DatabaseType.Oracle)
             {
-                orderByClause = $"{QuoteIdentifier(idColumn.Name)} DESC";
-                Log.Debug("No primary key found - ordering by ID column (DESC): {OrderBy}", orderByClause);
-            }
-            else if (metadata.Columns.Count > 0)
-            {
-                orderByClause = $"{QuoteIdentifier(metadata.Columns[0].Name)} DESC";
-                Log.Debug("No primary key or ID column - ordering by first column (DESC): {OrderBy}", orderByClause);
+                if (useAggressiveNormalization)
+                {
+                    // RETRY: Use UPPER/TRIM with binary collation (slower but more reliable)
+                    return $"NLSSORT(UPPER(TRIM({quotedName})), 'NLS_SORT=BINARY') ASC NULLS FIRST";
+                }
+                else
+                {
+                    // FIRST ATTEMPT: Simple binary sort (faster)
+                    return $"NLSSORT({quotedName}, 'NLS_SORT=BINARY') ASC NULLS FIRST";
+                }
             }
             else
             {
-                orderByClause = "1";
-                Log.Warning("No columns available for ordering table: {Table}", tableReference);
+                if (useAggressiveNormalization)
+                {
+                    // RETRY: Use UPPER/TRIM with C collation (slower but more reliable)
+                    return $"UPPER(TRIM({quotedName})) COLLATE \"C\" ASC NULLS FIRST";
+                }
+                else
+                {
+                    // FIRST ATTEMPT: Simple C collation (faster)
+                    return $"{quotedName} COLLATE \"C\" ASC NULLS FIRST";
+                }
             }
-        }
-
-        string columnList;
-        if (metadata.Columns.Count > 0)
-        {
-            columnList = string.Join(", ", metadata.Columns.Select(c => QuoteIdentifier(c.Name)));
         }
         else
         {
-            columnList = "*";
+            return $"{quotedName} ASC NULLS FIRST";
+        }
+    }
+
+    private string BuildSelectQuery(string tableReference, TableMetadata metadata)
+    {
+        var allOrderable = metadata.Columns
+            .Where(c => IsOrderableColumnType(c.Type) &&
+                       !IsLobColumnType(c.Type) &&
+                       !CouldBeLobColumn(c.Name, c.Type))
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        int cap = Math.Max(1, _maxOrderByColumns + _extraOrderColumns);
+        cap = Math.Min(cap, allOrderable.Count);
+
+        List<TableMetadata.ColumnMetadata> orderColumns;
+        if (allOrderable.Count <= cap)
+        {
+            orderColumns = allOrderable;
+        }
+        else
+        {
+            var pkNames = new HashSet<string>(metadata.PrimaryKeyColumns, StringComparer.OrdinalIgnoreCase);
+            var selected = new List<TableMetadata.ColumnMetadata>();
+
+            selected.AddRange(allOrderable.Where(c => pkNames.Contains(c.Name)).Take(cap));
+
+            if (selected.Count < cap)
+            {
+                selected.AddRange(allOrderable
+                    .Where(c => !pkNames.Contains(c.Name) &&
+                                IsNumericOrTimestampColumnType(c.Type.ToUpperInvariant()))
+                    .Take(cap - selected.Count));
+            }
+
+            if (selected.Count < cap)
+            {
+                var usedNames = new HashSet<string>(selected.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
+                selected.AddRange(allOrderable
+                    .Where(c => !usedNames.Contains(c.Name))
+                    .Take(cap - selected.Count));
+            }
+
+            orderColumns = selected;
+            Log.Information("Large table: capped ORDER BY at {Cap} of {Total} orderable columns: {Cols}",
+                cap, allOrderable.Count,
+                string.Join(", ", orderColumns.Select(c => c.Name)));
         }
 
+        string orderByClause = BuildOrderByClause(orderColumns);
+        string columnList = BuildColumnList(metadata);
+        return BuildFinalQuery(tableReference, columnList, orderByClause, orderColumns, metadata);
+    }
+
+    private List<TableMetadata.ColumnMetadata> BuildOrderColumnList(
+        List<TableMetadata.ColumnMetadata> allOrderableColumns,
+        List<ColumnStats> columnStats,
+        List<string> primaryKeyColumns,
+        int targetCount)
+    {
+        var orderColumns = new List<TableMetadata.ColumnMetadata>();
+        
+        // Priority 1: Numeric/timestamp columns FIRST (deterministic ordering across DBs)
+        var numericColumns = allOrderableColumns
+            .Where(c => IsNumericOrTimestampColumnType(c.Type.ToUpperInvariant()))
+            .OrderByDescending(c => IsTimestampColumnType(c.Type.ToUpperInvariant()) ? 2 : 1) // Timestamps highest priority
+            .ThenByDescending(c => primaryKeyColumns.Any(pk => pk.Equals(c.Name, StringComparison.OrdinalIgnoreCase)) ? 1 : 0) // Then PKs
+            .ThenByDescending(c => GetDistinctCount(c.Name, columnStats))
+            .Take(Math.Max(targetCount / 2, 3)) // At least half the order columns should be numeric
+            .ToList();
+        
+        orderColumns.AddRange(numericColumns);
+        
+        if (numericColumns.Count > 0)
+        {
+            Log.Information("Using {Count} numeric/timestamp column(s) for deterministic ordering: {Columns}",
+                numericColumns.Count,
+                string.Join(", ", numericColumns.Select(c => $"{c.Name}({c.Type})")));
+        }
+        
+        // Priority 2: High-cardinality string columns (after numeric stability)
+        if (orderColumns.Count < targetCount)
+        {
+            var stringColumns = allOrderableColumns
+                .Where(c => !orderColumns.Any(o => o.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase)))
+                .OrderByDescending(c => GetDistinctCount(c.Name, columnStats))
+                .ThenBy(c => GetNullCount(c.Name, columnStats))
+                .Take(targetCount - orderColumns.Count);
+            
+            orderColumns.AddRange(stringColumns);
+        }
+        
+        // Priority 3: Primary key columns (if not already included)
+        if (primaryKeyColumns.Count > 0 && orderColumns.Count < targetCount)
+        {
+            foreach (var pk in primaryKeyColumns)
+            {
+                if (orderColumns.Count >= targetCount) break;
+                
+                var col = allOrderableColumns.FirstOrDefault(c => c.Name.Equals(pk, StringComparison.OrdinalIgnoreCase));
+                if (col != null && !orderColumns.Any(o => o.Name.Equals(col.Name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    orderColumns.Add(col);
+                }
+            }
+        }
+        
+        // Priority 4: Fill remaining slots
+        if (orderColumns.Count < targetCount)
+        {
+            var remainingColumns = allOrderableColumns
+                .Where(c => !orderColumns.Any(o => o.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase)))
+                .Take(targetCount - orderColumns.Count);
+            
+            orderColumns.AddRange(remainingColumns);
+        }
+        return orderColumns.Where(c => !IsLobColumnType(c.Type) && !CouldBeLobColumn(c.Name, c.Type)).ToList();
+    }
+
+    private long GetDistinctCount(string columnName, List<ColumnStats> stats)
+    {
+        return stats.FirstOrDefault(s => s.ColumnName.Equals(columnName, StringComparison.OrdinalIgnoreCase))?.DistinctCount ?? 0;
+    }
+
+    private long GetNullCount(string columnName, List<ColumnStats> stats)
+    {
+        return stats.FirstOrDefault(s => s.ColumnName.Equals(columnName, StringComparison.OrdinalIgnoreCase))?.NullCount ?? long.MaxValue;
+    }
+
+    private string BuildOrderByClause(List<TableMetadata.ColumnMetadata> orderColumns)
+    {
+        if (orderColumns.Count == 0)
+        {
+            Log.Warning("No orderable columns available - using constant ORDER BY 1");
+            return "1";
+        }
+        
+        bool useAggressiveNormalization = _extraOrderColumns > 0;
+        var orderByParts = orderColumns.Select(c => BuildOrderByExpression(c.Name, c.Type, useAggressiveNormalization));
+        
+        Log.Information("ORDER BY {Count} column(s): {Columns}",
+            orderColumns.Count,
+            string.Join(", ", orderColumns.Select(c => c.Name)));
+        
+        return string.Join(", ", orderByParts);
+    }
+
+    private string BuildColumnList(TableMetadata metadata)
+    {
+        if (_skipLobColumns && metadata.Columns.Any(c => IsLobColumnType(c.Type)))
+        {
+            var nonLobColumns = metadata.Columns
+                .Where(c => !IsLobColumnType(c.Type))
+                .Select(c => QuoteIdentifier(c.Name));
+            
+            return string.Join(", ", nonLobColumns);
+        }
+        
+        if (metadata.Columns.Any(c => IsLobColumnType(c.Type)))
+        {
+            var columnExpressions = metadata.Columns.Select(col =>
+                IsLobColumnType(col.Type) ? BuildLobLimitedColumn(col.Name, col.Type) : QuoteIdentifier(col.Name));
+            
+            return string.Join(", ", columnExpressions);
+        }
+
+        var columns = metadata.Columns.Select(c => QuoteIdentifier(c.Name));
+        return string.Join(", ", columns);
+    }
+
+    private string BuildFinalQuery(string tableReference, string columnList, string orderByClause,
+                                   List<TableMetadata.ColumnMetadata> orderColumns, TableMetadata metadata)
+    {
         var sql = new System.Text.StringBuilder($"SELECT {columnList} FROM {tableReference} ORDER BY {orderByClause}");
 
         if (_maxRowsPerTable > 0)
         {
-            if (_databaseType == DatabaseType.Oracle)
-            {
-                sql.Append($" FETCH FIRST {_maxRowsPerTable} ROWS ONLY");
-            }
-            else if (_databaseType == DatabaseType.PostgreSQL)
-            {
-                sql.Append($" LIMIT {_maxRowsPerTable}");
-            }
-            Log.Debug("Query with row limit: {Sql}", sql.ToString());
+            sql.Append(_databaseType == DatabaseType.Oracle
+                ? $" FETCH FIRST {_maxRowsPerTable} ROWS ONLY"
+                : $" LIMIT {_maxRowsPerTable}");
         }
 
+        Log.Information("Query: {Sql}", sql.ToString());
         return sql.ToString();
+    }
+
+
+    private string BuildNormalisedTextExpression(string columnName, string columnType)
+    {
+        var q = QuoteIdentifier(columnName);
+        var typeUpper = (columnType ?? "").ToUpperInvariant();
+
+        if (_databaseType == DatabaseType.Oracle)
+        {
+
+            // DATE / TIMESTAMP → explicit ISO format matching PostgreSQL's text cast
+            if (typeUpper == "DATE" || typeUpper.StartsWith("TIMESTAMP"))
+                return $"CASE WHEN {q} IS NULL THEN 'NULL' WHEN {q} < DATE '1900-01-01' THEN TO_CHAR({q}) ELSE TO_CHAR({q}, 'YYYY-MM-DD HH24:MI:SS.FF6') END";
+
+            // NUMBER / FLOAT → use a fixed decimal format to avoid NLS-dependent output
+            if (typeUpper is "NUMBER" or "FLOAT" or "INTEGER" or "BINARY_FLOAT" or "BINARY_DOUBLE"
+                || typeUpper.StartsWith("NUMBER(") || typeUpper.StartsWith("FLOAT("))
+                return $"NVL(TO_CHAR({q}), 'NULL')";
+
+            return $"NVL(TO_CHAR({q}), 'NULL')";
+        }
+        else // PostgreSQL
+        {
+
+            // timestamp / timestamptz → explicit ISO format
+            if (typeUpper.Contains("TIMESTAMP") || typeUpper == "DATE")
+                return $"COALESCE(TO_CHAR({q}, 'YYYY-MM-DD HH24:MI:SS.US'), 'NULL')";
+
+            return $"COALESCE(CAST({q} AS TEXT), 'NULL')";
+        }
+    }
+
+    private string BuildLobLimitedColumn(string columnName, string columnType)
+    {
+        var quotedName = QuoteIdentifier(columnName);
+        var typeUpper = columnType.ToUpperInvariant();
+
+        if (_databaseType == DatabaseType.Oracle)
+        {
+            if (typeUpper.Contains("BYTE[]") || typeUpper.Contains("BYTE") ||
+                typeUpper.Contains("BLOB"))
+            {
+                var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 2000) : 2000;
+                return $"DBMS_LOB.SUBSTR({quotedName}, {effectiveLimit}, 1) AS {quotedName}";
+            }
+            else if (typeUpper.Contains("CLOB") || typeUpper.Contains("NCLOB"))
+            {
+                var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 4000) : 4000;
+                return $"DBMS_LOB.SUBSTR({quotedName}, {effectiveLimit}, 1) AS {quotedName}";
+            }
+            else if (typeUpper.Contains("RAW"))
+            {
+                var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 2000) : 2000;
+                return $"SUBSTR({quotedName}, 1, {effectiveLimit}) AS {quotedName}";
+            }
+        }
+        else if (_databaseType == DatabaseType.PostgreSQL)
+        {
+            if (typeUpper.Contains("BYTEA") || typeUpper.Contains("BYTE[]") || typeUpper.Contains("BYTE"))
+            {
+                var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 2000) : 2000;
+                return $"substring({quotedName} from 1 for {effectiveLimit}) AS {quotedName}";
+            }
+            else if (typeUpper.Contains("TEXT"))
+            {
+                var effectiveLimit = _lobSizeLimit > 0 ? Math.Min(_lobSizeLimit, 4000) : 4000;
+                return $"substring({quotedName} from 1 for {effectiveLimit}) AS {quotedName}";
+            }
+        }
+        
+        return quotedName;
     }
 
     private string QuoteIdentifier(string identifier)
     {
         if (_databaseType == DatabaseType.Oracle)
         {
-            return $"\"{identifier}\"";
+            return $"\"{identifier.ToUpperInvariant()}\"";
         }
         else if (_databaseType == DatabaseType.PostgreSQL)
         {
-            return $"\"{identifier}\"";
+            return $"\"{identifier.ToLowerInvariant()}\"";
         }
         return identifier;
+    }
+
+    private static string NormalizeXmlString(string xmlStr)
+    {
+        var cleaned = System.Text.RegularExpressions.Regex.Replace(xmlStr, @"<\?xml[^?]*\?>", "").Trim();
+        
+        try
+        {
+            var doc = XDocument.Parse(cleaned);
+            SortXmlElements(doc.Root);
+            var result = doc.ToString(SaveOptions.DisableFormatting);
+            result = System.Text.RegularExpressions.Regex.Replace(result, @">\s+<", "><");
+            Log.Debug("XML normalization succeeded, result length={Length}", result.Length);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("XML normalization failed ({Error}), using regex fallback. Input length={Length}, starts with: {Start}", 
+                ex.Message, cleaned.Length, cleaned.Length > 100 ? cleaned[..100] : cleaned);
+            return System.Text.RegularExpressions.Regex.Replace(cleaned, @">\s+<", "><");
+        }
+    }
+
+    private static void SortXmlElements(System.Xml.Linq.XElement? element)
+    {
+        if (element == null) return;
+        
+        foreach (var child in element.Elements().ToList())
+        {
+            SortXmlElements(child);
+        }
+        
+        var sortedChildren = element.Elements()
+            .OrderBy(e => e.Name.LocalName, StringComparer.Ordinal)
+            .ToList();
+        
+        var textNodes = element.Nodes().OfType<System.Xml.Linq.XText>()
+            .Where(t => !string.IsNullOrWhiteSpace(t.Value))
+            .ToList();
+        
+        element.RemoveNodes();
+        
+        foreach (var text in textNodes)
+        {
+            element.Add(text);
+        }
+        
+        foreach (var child in sortedChildren)
+        {
+            element.Add(child);
+        }
     }
 }

@@ -6,6 +6,7 @@ using Ora2Pg.Common.Config;
 using Ora2Pg.Common.Util;
 using Ora2PgSchemaComparer.Model;
 using Ora2PgSchemaComparer.Util;
+using System.Collections.Concurrent;
 
 namespace Ora2PgSchemaComparer.Extractor;
 
@@ -16,6 +17,7 @@ public class OracleSchemaExtractor
     private readonly DatabaseConnectionManager _connectionManager;
     private readonly HashSet<string> _columnsToSkip;
     private readonly ObjectFilter _objectFilter;
+    private readonly int _parallelObjects;
 
     public OracleSchemaExtractor(DatabaseConnectionManager connectionManager)
     {
@@ -27,6 +29,9 @@ public class OracleSchemaExtractor
             skipColumnsEnv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             StringComparer.OrdinalIgnoreCase
         );
+
+        var parallelTables = ApplicationProperties.Instance.GetInt("PARALLEL_TABLES", 4);
+        _parallelObjects = ApplicationProperties.Instance.GetInt("PARALLEL_OBJECTS", parallelTables);
 
         if (_columnsToSkip.Any())
         {
@@ -47,12 +52,53 @@ public class OracleSchemaExtractor
         schema.Tables = ExtractTables(schemaName);
         schema.Partitions = ExtractPartitionMetadata(schemaName);
         AttachPartitionMetadata(schema);
-        schema.Constraints = ExtractConstraints(schemaName);
-        schema.Indexes = ExtractIndexes(schemaName);
-        schema.Sequences = ExtractSequencesWithErrorTracking(schemaName, schema);
-        schema.Views = ExtractViewsWithErrorTracking(schemaName, schema);
-        schema.Triggers = ExtractTriggersWithErrorTracking(schemaName, schema);
-        schema.Procedures = ExtractProceduresWithErrorTracking(schemaName, schema);
+
+        if (_parallelObjects > 1)
+        {
+            _logger.Information("Extracting schema objects in parallel (max {Parallelism} concurrent)...", _parallelObjects);
+
+            var errors = new ConcurrentBag<string>();
+
+            List<ConstraintDefinition>? constraints = null;
+            List<IndexDefinition>? indexes = null;
+            List<SequenceDefinition>? sequences = null;
+            List<ViewDefinition>? views = null;
+            List<TriggerDefinition>? triggers = null;
+            List<ProcedureDefinition>? procedures = null;
+
+            var extractors = new List<Action>
+            {
+                () => { try { constraints  = ExtractConstraints(schemaName);  } catch (Exception ex) { errors.Add($"Constraints: {ex.Message}");  constraints  = new List<ConstraintDefinition>();  } },
+                () => { try { indexes      = ExtractIndexes(schemaName);      } catch (Exception ex) { errors.Add($"Indexes: {ex.Message}");       indexes      = new List<IndexDefinition>();       } },
+                () => { try { sequences    = ExtractSequences(schemaName);    } catch (Exception ex) { errors.Add($"Sequences: {ex.Message}");     sequences    = new List<SequenceDefinition>();    } },
+                () => { try { views        = ExtractViews(schemaName);        } catch (Exception ex) { errors.Add($"Views: {ex.Message}");         views        = new List<ViewDefinition>();        } },
+                () => { try { triggers     = ExtractTriggers(schemaName);     } catch (Exception ex) { errors.Add($"Triggers: {ex.Message}");      triggers     = new List<TriggerDefinition>();     } },
+                () => { try { procedures   = ExtractProcedures(schemaName);   } catch (Exception ex) { errors.Add($"Procedures: {ex.Message}");    procedures   = new List<ProcedureDefinition>();   } },
+            };
+
+            Parallel.ForEach(extractors,
+                new ParallelOptions { MaxDegreeOfParallelism = _parallelObjects },
+                action => action());
+
+            schema.Constraints = constraints!;
+            schema.Indexes      = indexes!;
+            schema.Sequences    = sequences!;
+            schema.Views        = views!;
+            schema.Triggers     = triggers!;
+            schema.Procedures   = procedures!;
+
+            foreach (var error in errors)
+                schema.ExtractionErrors.Add(error);
+        }
+        else
+        {
+            schema.Constraints = ExtractConstraints(schemaName);
+            schema.Indexes = ExtractIndexes(schemaName);
+            schema.Sequences = ExtractSequencesWithErrorTracking(schemaName, schema);
+            schema.Views = ExtractViewsWithErrorTracking(schemaName, schema);
+            schema.Triggers = ExtractTriggersWithErrorTracking(schemaName, schema);
+            schema.Procedures = ExtractProceduresWithErrorTracking(schemaName, schema);
+        }
 
         _logger.Information("✓ Extracted Oracle schema: {TableCount} tables, {ConstraintCount} constraints, {IndexCount} indexes, {SequenceCount} sequences, {ViewCount} views, {TriggerCount} triggers, {ProcedureCount} procedures/functions",
             schema.TableCount, schema.Constraints.Count, schema.IndexCount, schema.SequenceCount, schema.ViewCount + schema.MaterializedViewCount, schema.TriggerCount, schema.Procedures.Count);
@@ -347,12 +393,12 @@ public class OracleSchemaExtractor
         connection.Open();
         
         var query = $@"
-            SELECT c.constraint_name, c.table_name, 
+            SELECT c.constraint_name, c.table_name, c.status,
                    LISTAGG(cc.column_name, ',') WITHIN GROUP (ORDER BY cc.position) as columns
             FROM all_constraints c
             JOIN all_cons_columns cc ON c.owner = cc.owner AND c.constraint_name = cc.constraint_name
             WHERE c.owner = '{schemaName.ToUpper()}' AND c.constraint_type = 'P'
-            GROUP BY c.constraint_name, c.table_name
+            GROUP BY c.constraint_name, c.table_name, c.status
             ORDER BY c.table_name";
         
         using var cmd = new OracleCommand(query, (OracleConnection)connection);
@@ -372,7 +418,8 @@ public class OracleSchemaExtractor
                 SchemaName = schemaName.ToUpper(),
                 TableName = tableName,
                 Type = ConstraintType.PrimaryKey,
-                Columns = reader.GetString(2).Split(',').ToList()
+                Columns = reader.GetString(3).Split(',').ToList(),
+                IsEnabled = reader.GetString(2) == "ENABLED"
             });
         }
         
@@ -390,7 +437,7 @@ public class OracleSchemaExtractor
         
         var query = $@"
             SELECT c.constraint_name, c.table_name, c.r_owner, rc.table_name as ref_table,
-                   c.delete_rule, c.deferrable, c.deferred,
+                   c.delete_rule, c.deferrable, c.deferred, c.status,
                    LISTAGG(cc.column_name, ',') WITHIN GROUP (ORDER BY cc.position) as columns,
                    LISTAGG(rcc.column_name, ',') WITHIN GROUP (ORDER BY rcc.position) as ref_columns
             FROM all_constraints c
@@ -398,7 +445,7 @@ public class OracleSchemaExtractor
             JOIN all_constraints rc ON c.r_owner = rc.owner AND c.r_constraint_name = rc.constraint_name
             JOIN all_cons_columns rcc ON rc.owner = rcc.owner AND rc.constraint_name = rcc.constraint_name
             WHERE c.owner = '{schemaName.ToUpper()}' AND c.constraint_type = 'R'
-            GROUP BY c.constraint_name, c.table_name, c.r_owner, rc.table_name, c.delete_rule, c.deferrable, c.deferred
+            GROUP BY c.constraint_name, c.table_name, c.r_owner, rc.table_name, c.delete_rule, c.deferrable, c.deferred, c.status
             ORDER BY c.table_name";
         
         using var cmd = new OracleCommand(query, (OracleConnection)connection);
@@ -442,8 +489,9 @@ public class OracleSchemaExtractor
                 OnUpdateRule = "NO ACTION", // Oracle doesn't have ON UPDATE
                 IsDeferrable = reader.GetString(5) == "DEFERRABLE",
                 IsInitiallyDeferred = reader.GetString(6) == "DEFERRED",
-                Columns = reader.GetString(7).Split(',').ToList(),
-                ReferencedColumns = reader.GetString(8).Split(',').ToList()
+                IsEnabled = reader.GetString(7) == "ENABLED",
+                Columns = reader.GetString(8).Split(',').ToList(),
+                ReferencedColumns = reader.GetString(9).Split(',').ToList()
             });
         }
         
@@ -472,12 +520,12 @@ public class OracleSchemaExtractor
         connection.Open();
         
         var query = $@"
-            SELECT c.constraint_name, c.table_name,
+            SELECT c.constraint_name, c.table_name, c.status,
                    LISTAGG(cc.column_name, ',') WITHIN GROUP (ORDER BY cc.position) as columns
             FROM all_constraints c
             JOIN all_cons_columns cc ON c.owner = cc.owner AND c.constraint_name = cc.constraint_name
             WHERE c.owner = '{schemaName.ToUpper()}' AND c.constraint_type = 'U'
-            GROUP BY c.constraint_name, c.table_name
+            GROUP BY c.constraint_name, c.table_name, c.status
             ORDER BY c.table_name";
         
         using var cmd = new OracleCommand(query, (OracleConnection)connection);
@@ -497,7 +545,8 @@ public class OracleSchemaExtractor
                 SchemaName = schemaName.ToUpper(),
                 TableName = tableName,
                 Type = ConstraintType.Unique,
-                Columns = reader.GetString(2).Split(',').ToList()
+                Columns = reader.GetString(3).Split(',').ToList(),
+                IsEnabled = reader.GetString(2) == "ENABLED"
             });
         }
         
@@ -512,7 +561,7 @@ public class OracleSchemaExtractor
         connection.Open();
         
         var query = $@"
-            SELECT constraint_name, table_name, search_condition
+            SELECT constraint_name, table_name, search_condition, status
             FROM all_constraints
             WHERE owner = '{schemaName.ToUpper()}' AND constraint_type = 'C'
             AND constraint_name NOT LIKE 'SYS_%'
@@ -540,7 +589,8 @@ public class OracleSchemaExtractor
                 SchemaName = schemaName.ToUpper(),
                 TableName = tableName,
                 Type = ConstraintType.Check,
-                CheckCondition = condition
+                CheckCondition = condition,
+                IsEnabled = reader.GetString(3) == "ENABLED"
             });
         }
         

@@ -9,16 +9,38 @@ public class DataValidationHtmlWriter : BaseHtmlReportWriter
 {
     private string _oracleDatabase = string.Empty;
     private string _postgresDatabase = string.Empty;
+    private string _oracleSchema = string.Empty;
+    private string _postgresSchema = string.Empty;
     
     public void WriteHtmlReport(List<ComparisonResult> results, string outputPath)
     {
-        WriteHtmlReport(results, outputPath, string.Empty, string.Empty);
+        WriteHtmlReport(results, outputPath, string.Empty, string.Empty, string.Empty, string.Empty);
     }
 
     public void WriteHtmlReport(List<ComparisonResult> results, string outputPath, string oracleDatabase, string postgresDatabase)
     {
+        WriteHtmlReport(results, outputPath, oracleDatabase, postgresDatabase, string.Empty, string.Empty);
+    }
+
+    public void WriteHtmlReport(List<ComparisonResult> results, string outputPath, string oracleDatabase, string postgresDatabase, string oracleSchema, string postgresSchema)
+    {
         _oracleDatabase = oracleDatabase;
         _postgresDatabase = postgresDatabase;
+        _oracleSchema = oracleSchema;
+        _postgresSchema = postgresSchema;
+        
+        // Try to extract schema from first result if not provided
+        if (string.IsNullOrEmpty(_oracleSchema) && results.Count > 0)
+        {
+            var parts = results[0].SourceTable.Split('.');
+            if (parts.Length > 1) _oracleSchema = parts[0];
+        }
+        if (string.IsNullOrEmpty(_postgresSchema) && results.Count > 0)
+        {
+            var parts = results[0].TargetTable.Split('.');
+            if (parts.Length > 1) _postgresSchema = parts[0];
+        }
+        
         var html = GenerateHtml(results);
         File.WriteAllText(outputPath, html);
     }
@@ -56,6 +78,14 @@ public class DataValidationHtmlWriter : BaseHtmlReportWriter
         {
             metadata.Add("PostgreSQL Database", _postgresDatabase);
         }
+        if (!string.IsNullOrEmpty(_oracleSchema))
+        {
+            metadata.Add("Oracle Schema", _oracleSchema);
+        }
+        if (!string.IsNullOrEmpty(_postgresSchema))
+        {
+            metadata.Add("PostgreSQL Schema", _postgresSchema);
+        }
         
         metadata.Add("Validation Date", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
         metadata.Add("Total Objects Compared", $"{totalObjects:N0} ({totalTables} tables, {totalViews} views)");
@@ -73,26 +103,26 @@ public class DataValidationHtmlWriter : BaseHtmlReportWriter
             new("Tables", totalTables.ToString(), "\U0001F4CB", null),  // 📋
             new("Views", totalViews.ToString(), "\U0001F50D", null),  // 🔍
             new("Successful Matches", successfulObjects.ToString(), 
-                successfulObjects == totalObjects ? "\u2705" : "\U0001F534",  // ✅ : 🔴
-                successfulObjects == totalObjects ? "match" : "mismatch"),
+                successfulObjects > 0 ? "\u2705" : "\U0001F534",  // ✅ : 🔴
+                successfulObjects > 0 ? null : "mismatch"),  // white background when > 0
             new("Failed Validations", failedObjects.ToString(), 
                 failedObjects == 0 ? "\u2705" : "\u274C",  // ✅ : ❌
-                failedObjects == 0 ? "match" : "mismatch"),
+                failedObjects == 0 ? null : "mismatch"),  // white background when 0
             new("Errors", errorObjects.ToString(), 
                 errorObjects == 0 ? "\u2705" : "\U0001F534",  // ✅ : 🔴
-                errorObjects == 0 ? "match" : "mismatch"),
+                errorObjects == 0 ? null : "mismatch"),  // white background when 0
             new("Total Source Rows", FormatNumber(totalSourceRows), "\U0001F4C8", null),  // 📈
             new("Total Target Rows", FormatNumber(totalTargetRows), "\U0001F4CA", null),  // 📊
-            new("Matching Rows", FormatNumber(totalMatchingRows), "\u2705", "match"),  // ✅
+            new("Matching Rows", FormatNumber(totalMatchingRows), "\u2705", null),  // ✅, white background
             new("Mismatched Rows", FormatNumber(totalMismatchedRows), 
                 totalMismatchedRows == 0 ? "\u2705" : "\u274C",  // ✅ : ❌
-                totalMismatchedRows == 0 ? "match" : "mismatch"),
+                totalMismatchedRows == 0 ? null : "mismatch"),  // white background when 0
             new("Missing in Target", FormatNumber(totalMissingRows), 
                 totalMissingRows == 0 ? "\u2705" : "\u26A0\uFE0F",  // ✅ : ⚠️
-                totalMissingRows == 0 ? "match" : "warning"),
+                totalMissingRows == 0 ? null : "warning"),  // white background when 0
             new("Extra in Target", FormatNumber(totalExtraRows), 
                 totalExtraRows == 0 ? "\u2705" : "\u26A0\uFE0F",  // ✅ : ⚠️
-                totalExtraRows == 0 ? "match" : "warning")
+                totalExtraRows == 0 ? null : "warning")  // white background when 0
         };
         sb.Append(GenerateSummaryTable(summaryMetrics));
 

@@ -2,43 +2,52 @@ using Npgsql;
 using Ora2PgRowCountValidator.Models;
 using Serilog;
 using Ora2Pg.Common.Util;
+using Ora2Pg.Common.Config;
+using System.Collections.Concurrent;
 
 namespace Ora2PgRowCountValidator.Extractors;
 
 public class PostgresRowCountExtractor
 {
     private readonly string _connectionString;
+    private readonly int _commandTimeoutSeconds;
+    private readonly int _parallelTables;
 
-    public PostgresRowCountExtractor(string connectionString)
+    public PostgresRowCountExtractor(string connectionString, int commandTimeoutSeconds = 300)
     {
         _connectionString = connectionString;
+        _commandTimeoutSeconds = commandTimeoutSeconds;
+        _parallelTables = ApplicationProperties.Instance.GetInt("PARALLEL_TABLES", 4);
     }
 
     public async Task<List<TableRowCount>> ExtractRowCountsAsync(string schemaName)
     {
-        var rowCounts = new List<TableRowCount>();
-
-        using var connection = new NpgsqlConnection(_connectionString);
-        await connection.OpenAsync();
-
-        var partitionMap = await GetPartitionMapAsync(connection, schemaName);
-        var partitionChildren = partitionMap.Values.SelectMany(p => p).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var tableQuery = @"
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = @schemaName
-            AND table_type = 'BASE TABLE'
-            ORDER BY table_name";
-
         var tableNames = new List<string>();
-        using (var cmd = new NpgsqlCommand(tableQuery, connection))
+        Dictionary<string, List<string>> partitionMap;
+        HashSet<string> partitionChildren;
+
+        using (var connection = new NpgsqlConnection(_connectionString))
         {
-            cmd.Parameters.AddWithValue("schemaName", schemaName.ToLower());
-            using var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
+            await connection.OpenAsync();
+
+            partitionMap = await GetPartitionMapAsync(connection, schemaName);
+            partitionChildren = partitionMap.Values.SelectMany(p => p).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var tableQuery = @"
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = @schemaName
+                AND table_type = 'BASE TABLE'
+                ORDER BY table_name";
+
+            using (var cmd = new NpgsqlCommand(tableQuery, connection))
             {
-                tableNames.Add(reader.GetString(0));
+                cmd.Parameters.AddWithValue("schemaName", schemaName.ToLower());
+                using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    tableNames.Add(reader.GetString(0));
+                }
             }
         }
 
@@ -56,14 +65,26 @@ public class PostgresRowCountExtractor
         tableNames = filteredTables;
 
         Log.Information($"Found {tableNames.Count} tables in PostgreSQL schema {schemaName}");
+        Log.Information("Processing tables in parallel (max {Parallel} concurrent)", _parallelTables);
 
-        foreach (var tableName in tableNames)
+        var rowCounts = new ConcurrentBag<TableRowCount>();
+
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = _parallelTables
+        };
+
+        await Parallel.ForEachAsync(tableNames, parallelOptions, async (tableName, cancellationToken) =>
         {
             try
             {
+                using var connection = new NpgsqlConnection(_connectionString);
+                await connection.OpenAsync(cancellationToken);
+
                 var countQuery = $"SELECT COUNT(*) FROM {schemaName.ToLower()}.{tableName}";
                 using var cmd = new NpgsqlCommand(countQuery, connection);
-                var count = Convert.ToInt64(await cmd.ExecuteScalarAsync());
+                cmd.CommandTimeout = _commandTimeoutSeconds;
+                var count = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken));
 
                 var tableRowCount = new TableRowCount
                 {
@@ -75,7 +96,7 @@ public class PostgresRowCountExtractor
 
                 if (tableRowCount.IsPartitioned)
                 {
-                    var partitionRows = await GetPartitionRowCountsAsync(connection, schemaName, partitionMap[tableName]);
+                    var partitionRows = await GetPartitionRowCountsAsync(connection, schemaName, partitionMap[tableName], cancellationToken);
                     tableRowCount.PartitionRowCounts = partitionRows;
                 }
 
@@ -95,8 +116,9 @@ public class PostgresRowCountExtractor
                     IsPartitioned = partitionMap.ContainsKey(tableName)
                 });
             }
-        }
-        return rowCounts;
+        });
+
+        return rowCounts.OrderBy(r => r.TableName).ToList();
     }
 
     private async Task<Dictionary<string, List<string>>> GetPartitionMapAsync(NpgsqlConnection connection, string schemaName)
@@ -139,7 +161,8 @@ public class PostgresRowCountExtractor
     private async Task<List<PartitionRowCount>> GetPartitionRowCountsAsync(
         NpgsqlConnection connection,
         string schemaName,
-        List<string> partitionTables)
+        List<string> partitionTables,
+        CancellationToken cancellationToken = default)
     {
         var partitionCounts = new List<PartitionRowCount>();
 
@@ -149,7 +172,8 @@ public class PostgresRowCountExtractor
             {
                 var countQuery = $"SELECT COUNT(*) FROM {schemaName.ToLower()}.{partition}";
                 using var cmd = new NpgsqlCommand(countQuery, connection);
-                var count = Convert.ToInt64(await cmd.ExecuteScalarAsync());
+                cmd.CommandTimeout = _commandTimeoutSeconds;
+                var count = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken));
 
                 partitionCounts.Add(new PartitionRowCount
                 {

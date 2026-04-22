@@ -108,12 +108,22 @@ public class SchemaComparator
     {
         var logicalTableSet = new HashSet<string>(postgresLogicalTableNames, StringComparer.OrdinalIgnoreCase);
 
-        var oraclePKs = result.OracleSchema.Constraints.Where(c => c.Type == ConstraintType.PrimaryKey).ToList();
+        var oraclePKs = result.OracleSchema.Constraints
+            .Where(c => c.Type == ConstraintType.PrimaryKey)
+            .Where(c => logicalTableSet.Contains(c.TableName.ToUpperInvariant()))
+            .ToList();
         var postgresPKs = result.PostgresSchema.Constraints
             .Where(c => c.Type == ConstraintType.PrimaryKey)
             .Where(c => logicalTableSet.Contains(c.TableName.ToUpperInvariant()))
             .ToList();
 
+        // Identify disabled PKs in Oracle (not expected to be migrated)
+        var disabledOraclePKs = oraclePKs.Where(pk => !pk.IsEnabled).ToList();
+        foreach (var disabledPK in disabledOraclePKs)
+        {
+            result.DmsArtifacts.Add($"[Oracle Disabled] Table '{disabledPK.TableName}' has disabled primary key '{disabledPK.ConstraintName}' (not migrated - was disabled in Oracle)");
+        }
+        
         // Identify synthetic PKs (rowid) added by DMS
         var syntheticPKs = postgresPKs
             .Where(pk => pk.Columns.Count == 1 && 
@@ -127,18 +137,19 @@ public class SchemaComparator
             result.DmsArtifacts.Add($"ℹ️ [DMS Expected] Table '{syntheticPK.TableName}' has synthetic primary key 'rowid' (added by DMS for tables without PK)");
         }
 
+        var oraclePKsExcludingDisabled = oraclePKs.Except(disabledOraclePKs).ToList();
         var postgresPKsExcludingSynthetic = postgresPKs.Except(syntheticPKs).ToList();
 
-        result.OracleLogicalPrimaryKeyCount = oraclePKs.Count;
+        result.OracleLogicalPrimaryKeyCount = oraclePKsExcludingDisabled.Count;
         result.PostgresLogicalPrimaryKeyCount = postgresPKsExcludingSynthetic.Count;
         
-        if (oraclePKs.Count != postgresPKsExcludingSynthetic.Count)
+        if (oraclePKsExcludingDisabled.Count != postgresPKsExcludingSynthetic.Count)
         {
             var postgresPKTableSet = new HashSet<string>(
                 postgresPKsExcludingSynthetic.Select(pk => pk.TableName), 
                 StringComparer.OrdinalIgnoreCase);
             
-            var missingPKs = oraclePKs
+            var missingPKs = oraclePKsExcludingDisabled
                 .Where(pk => !postgresPKTableSet.Contains(pk.TableName))
                 .ToList();
             
@@ -148,7 +159,7 @@ public class SchemaComparator
             }
             
             var oraclePKTableSet = new HashSet<string>(
-                oraclePKs.Select(pk => pk.TableName), 
+                oraclePKsExcludingDisabled.Select(pk => pk.TableName), 
                 StringComparer.OrdinalIgnoreCase);
             
             var extraPKs = postgresPKsExcludingSynthetic
@@ -161,21 +172,32 @@ public class SchemaComparator
             }
         }
 
-        var oracleFKs = result.OracleSchema.Constraints.Where(c => c.Type == ConstraintType.ForeignKey).ToList();
+        var oracleFKs = result.OracleSchema.Constraints
+            .Where(c => c.Type == ConstraintType.ForeignKey)
+            .Where(c => logicalTableSet.Contains(c.TableName.ToUpperInvariant()))
+            .ToList();
         var postgresFKs = result.PostgresSchema.Constraints
             .Where(c => c.Type == ConstraintType.ForeignKey)
             .Where(c => logicalTableSet.Contains(c.TableName.ToUpperInvariant()))
             .ToList();
 
-        result.OracleLogicalForeignKeyCount = oracleFKs.Count;
+        var disabledOracleFKs = oracleFKs.Where(fk => !fk.IsEnabled).ToList();
+        foreach (var disabledFK in disabledOracleFKs)
+        {
+            result.DmsArtifacts.Add($"[Oracle Disabled] Table '{disabledFK.TableName}' has disabled foreign key '{disabledFK.ConstraintName}' → {disabledFK.ReferencedTableName} (not migrated - was disabled in Oracle)");
+        }
+        
+        var oracleFKsExcludingDisabled = oracleFKs.Except(disabledOracleFKs).ToList();
+
+        result.OracleLogicalForeignKeyCount = oracleFKsExcludingDisabled.Count;
         result.PostgresLogicalForeignKeyCount = postgresFKs.Count;
         
-        if (oracleFKs.Count != postgresFKs.Count)
+        if (oracleFKsExcludingDisabled.Count != postgresFKs.Count)
         {
             var postgresFKSet = new HashSet<string>(
                 postgresFKs.Select(fk => $"{fk.TableName}→{fk.ReferencedTableName}".ToUpperInvariant()));
             
-            var missingFKs = oracleFKs
+            var missingFKs = oracleFKsExcludingDisabled
                 .Where(fk => !postgresFKSet.Contains($"{fk.TableName}→{fk.ReferencedTableName}".ToUpperInvariant()))
                 .ToList();
             
@@ -185,7 +207,7 @@ public class SchemaComparator
             }
             
             var oracleFKSet = new HashSet<string>(
-                oracleFKs.Select(fk => $"{fk.TableName}→{fk.ReferencedTableName}".ToUpperInvariant()));
+                oracleFKsExcludingDisabled.Select(fk => $"{fk.TableName}→{fk.ReferencedTableName}".ToUpperInvariant()));
             
             var extraFKs = postgresFKs
                 .Where(fk => !oracleFKSet.Contains($"{fk.TableName}→{fk.ReferencedTableName}".ToUpperInvariant()))
@@ -197,7 +219,7 @@ public class SchemaComparator
             }
         }
 
-        foreach (var oracleFK in oracleFKs)
+        foreach (var oracleFK in oracleFKsExcludingDisabled)
         {
             var matchingFK = postgresFKs.FirstOrDefault(fk => 
                 fk.TableName.Equals(oracleFK.TableName, StringComparison.OrdinalIgnoreCase) &&
@@ -210,27 +232,60 @@ public class SchemaComparator
             }
         }
 
-        var oracleUniques = result.OracleSchema.Constraints.Where(c => c.Type == ConstraintType.Unique).ToList();
+        var oracleUniques = result.OracleSchema.Constraints
+            .Where(c => c.Type == ConstraintType.Unique)
+            .Where(c => logicalTableSet.Contains(c.TableName.ToUpperInvariant()))
+            .ToList();
         var postgresUniques = result.PostgresSchema.Constraints
             .Where(c => c.Type == ConstraintType.Unique)
             .Where(c => logicalTableSet.Contains(c.TableName.ToUpperInvariant()))
             .ToList();
 
-        result.OracleLogicalUniqueConstraintCount = oracleUniques.Count;
-        result.PostgresLogicalUniqueConstraintCount = postgresUniques.Count;
+        var syntheticUniques = postgresUniques
+            .Where(u => u.Columns.Count == 1 && 
+                       u.Columns[0].Equals("rowid", StringComparison.OrdinalIgnoreCase))
+            .ToList();
         
-        if (oracleUniques.Count != postgresUniques.Count)
+        foreach (var syntheticUnique in syntheticUniques)
         {
-            result.ConstraintIssues.Add($"Unique constraint count mismatch: Oracle={oracleUniques.Count}, PostgreSQL={postgresUniques.Count}");
+            result.DmsArtifacts.Add($"[DMS Expected] Table '{syntheticUnique.TableName}' has synthetic unique constraint '{syntheticUnique.ConstraintName}' on 'rowid' column (added by DMS)");
         }
 
-        var oracleChecks = result.OracleSchema.Constraints.Where(c => c.Type == ConstraintType.Check).ToList();
+        var disabledOracleUniques = oracleUniques.Where(u => !u.IsEnabled).ToList();
+        foreach (var disabledUnique in disabledOracleUniques)
+        {
+            result.DmsArtifacts.Add($"[Oracle Disabled] Table '{disabledUnique.TableName}' has disabled unique constraint '{disabledUnique.ConstraintName}' (not migrated - was disabled in Oracle)");
+        }
+        
+        var oracleUniquesExcludingDisabled = oracleUniques.Except(disabledOracleUniques).ToList();
+        var postgresUniquesExcludingSynthetic = postgresUniques.Except(syntheticUniques).ToList();
+
+        result.OracleLogicalUniqueConstraintCount = oracleUniquesExcludingDisabled.Count;
+        result.PostgresLogicalUniqueConstraintCount = postgresUniquesExcludingSynthetic.Count;
+        
+        if (oracleUniquesExcludingDisabled.Count != postgresUniquesExcludingSynthetic.Count)
+        {
+            result.ConstraintIssues.Add($"Unique constraint count mismatch: Oracle={oracleUniquesExcludingDisabled.Count}, PostgreSQL={postgresUniquesExcludingSynthetic.Count}");
+        }
+
+        var oracleChecks = result.OracleSchema.Constraints
+            .Where(c => c.Type == ConstraintType.Check)
+            .Where(c => logicalTableSet.Contains(c.TableName.ToUpperInvariant()))
+            .ToList();
         var postgresChecks = result.PostgresSchema.Constraints
             .Where(c => c.Type == ConstraintType.Check)
             .Where(c => logicalTableSet.Contains(c.TableName.ToUpperInvariant()))
             .ToList();
 
-        result.OracleLogicalCheckConstraintCount = oracleChecks.Count;
+        var disabledOracleChecks = oracleChecks.Where(ch => !ch.IsEnabled).ToList();
+        foreach (var disabledCheck in disabledOracleChecks)
+        {
+            result.DmsArtifacts.Add($"[Oracle Disabled] Table '{disabledCheck.TableName}' has disabled check constraint '{disabledCheck.ConstraintName}' (not migrated - was disabled in Oracle)");
+        }
+        
+        var oracleChecksExcludingDisabled = oracleChecks.Except(disabledOracleChecks).ToList();
+
+        result.OracleLogicalCheckConstraintCount = oracleChecksExcludingDisabled.Count;
         result.PostgresLogicalCheckConstraintCount = postgresChecks.Count;
     }
     
@@ -262,16 +317,90 @@ public class SchemaComparator
         result.OracleLogicalIndexCount = oracleIndexes.Count;
         result.PostgresLogicalIndexCount = postgresIndexesExcludingRowid.Count;
         
+        var oracleIndexSet = new HashSet<string>(
+            oracleIndexes.Select(i => $"{i.TableName}.{i.IndexName}"),
+            StringComparer.OrdinalIgnoreCase);
+        var postgresIndexSet = new HashSet<string>(
+            postgresIndexesExcludingRowid.Select(i => $"{i.TableName}.{i.IndexName}"),
+            StringComparer.OrdinalIgnoreCase);
+        
+        var missingInPostgres = oracleIndexes
+            .Where(oi => !postgresIndexSet.Contains($"{oi.TableName}.{oi.IndexName}"))
+            .ToList();
+        
+        var extraInPostgres = postgresIndexesExcludingRowid
+            .Where(pi => !oracleIndexSet.Contains($"{pi.TableName}.{pi.IndexName}"))
+            .ToList();
+        
         if (oracleIndexes.Count != postgresIndexesExcludingRowid.Count)
         {
             var rowidNote = rowidIndexes.Any() ? $" (excluding {rowidIndexes.Count} DMS rowid indexes)" : "";
-            result.IndexIssues.Add($"Index count mismatch: Oracle={oracleIndexes.Count}, PostgreSQL={postgresIndexesExcludingRowid.Count}{rowidNote}");
+            result.IndexIssues.Add($"ℹ️ Index count mismatch: Oracle={oracleIndexes.Count}, PostgreSQL={postgresIndexesExcludingRowid.Count}{rowidNote}");
+            
+            const int maxDetailsToShow = 10; // Limit detailed output to prevent report overflow
+            
+            if (missingInPostgres.Any())
+            {
+                var indexesToShow = missingInPostgres.OrderBy(i => i.TableName).ThenBy(i => i.IndexName).Take(maxDetailsToShow);
+                
+                foreach (var idx in indexesToShow)
+                {
+                    var columns = idx.Columns != null && idx.Columns.Any() 
+                        ? $" on columns ({string.Join(", ", idx.Columns.Select(c => c.ColumnName))})"
+                        : "";
+                    var uniqueness = idx.IsUnique ? "UNIQUE " : "";
+                    result.IndexIssues.Add($"  - Missing: {uniqueness}Index '{idx.IndexName}' on table '{idx.TableName}'{columns}");
+                }
+                
+                if (missingInPostgres.Count > maxDetailsToShow)
+                {
+                    var remaining = missingInPostgres.Count - maxDetailsToShow;
+                    result.IndexIssues.Add($"  ... and {remaining} more missing index(es)");
+                }
+            }
+            
+            if (extraInPostgres.Any())
+            {
+                var indexesToShow = extraInPostgres.OrderBy(i => i.TableName).ThenBy(i => i.IndexName).Take(maxDetailsToShow);
+                
+                foreach (var idx in indexesToShow)
+                {
+                    var columns = idx.Columns != null && idx.Columns.Any() 
+                        ? $" on columns ({string.Join(", ", idx.Columns.Select(c => c.ColumnName))})"
+                        : "";
+                    var uniqueness = idx.IsUnique ? "UNIQUE " : "";
+                    result.IndexIssues.Add($"  - Extra: {uniqueness}Index '{idx.IndexName}' on table '{idx.TableName}'{columns}");
+                }
+                
+                if (extraInPostgres.Count > maxDetailsToShow)
+                {
+                    var remaining = extraInPostgres.Count - maxDetailsToShow;
+                    result.IndexIssues.Add($"  ... and {remaining} more additional index(es)");
+                }
+            }
         }
 
         var bitmapIndexes = oracleIndexes.Where(i => i.Type == IndexType.Bitmap).ToList();
         if (bitmapIndexes.Any())
         {
             result.IndexIssues.Add($"ℹ️ {bitmapIndexes.Count} Oracle BITMAP indexes found (should be converted to GIN in PostgreSQL)");
+            
+            const int maxBitmapToShow = 5;
+            var bitmapToShow = bitmapIndexes.OrderBy(i => i.TableName).ThenBy(i => i.IndexName).Take(maxBitmapToShow);
+            
+            foreach (var idx in bitmapToShow)
+            {
+                var columns = idx.Columns != null && idx.Columns.Any() 
+                    ? $" on columns ({string.Join(", ", idx.Columns.Select(c => c.ColumnName))})"
+                    : "";
+                result.IndexIssues.Add($"  - BITMAP Index '{idx.IndexName}' on table '{idx.TableName}'{columns}");
+            }
+            
+            if (bitmapIndexes.Count > maxBitmapToShow)
+            {
+                var remaining = bitmapIndexes.Count - maxBitmapToShow;
+                result.IndexIssues.Add($"  ... and {remaining} more BITMAP index(es).");
+            }
         }
     }
     

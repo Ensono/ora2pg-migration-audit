@@ -120,13 +120,14 @@ public class PostgresPrimaryKeyExtractor
         return allRows;
     }
 
-    public async Task<bool> RowExistsAsync(
-        string schemaName, 
-        string tableName, 
-        PrimaryKeyInfo pkInfo, 
-        Dictionary<string, object?> pkValues)
+    public async Task<HashSet<string>> BulkRowExistsAsync(
+        string schemaName,
+        string tableName,
+        PrimaryKeyInfo pkInfo,
+        List<Dictionary<string, object?>> pkValuesList)
     {
-        if (!pkInfo.HasPrimaryKey) return false;
+        var found = new HashSet<string>();
+        if (!pkInfo.HasPrimaryKey || pkValuesList.Count == 0) return found;
 
         try
         {
@@ -136,31 +137,63 @@ public class PostgresPrimaryKeyExtractor
             var pgTableName = tableName.ToLower();
             var pgSchemaName = schemaName.ToLower();
 
-            var whereConditions = pkInfo.PrimaryKeyColumns
-                .Select((col, idx) => $"\"{col.ToLower()}\" = @pk{idx}")
-                .ToList();
-
-            var query = $@"
-                SELECT COUNT(*)
-                FROM ""{pgSchemaName}"".""{pgTableName}""
-                WHERE {string.Join(" AND ", whereConditions)}";
-
-            using var command = new NpgsqlCommand(query, connection);
-            
-            for (int i = 0; i < pkInfo.PrimaryKeyColumns.Count; i++)
+            if (pkInfo.PrimaryKeyColumns.Count == 1)
             {
-                var columnName = pkInfo.PrimaryKeyColumns[i];
-                var value = pkValues.GetValueOrDefault(columnName);
-                command.Parameters.AddWithValue($"@pk{i}", value ?? DBNull.Value);
-            }
+                var col = pkInfo.PrimaryKeyColumns[0].ToLower();
+                var values = pkValuesList.Select(r => r.GetValueOrDefault(pkInfo.PrimaryKeyColumns[0])).ToArray();
 
-            var count = Convert.ToInt64(await command.ExecuteScalarAsync());
-            return count > 0;
+                var query = $@"SELECT ""{col}"" FROM ""{pgSchemaName}"".""{pgTableName}"" WHERE ""{col}"" = ANY(@values)";
+                using var command = new NpgsqlCommand(query, connection);
+                command.Parameters.AddWithValue("@values", values);
+
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                    found.Add(reader.GetValue(0)?.ToString() ?? "NULL");
+            }
+            else
+            {
+                var colList = string.Join(", ", pkInfo.PrimaryKeyColumns.Select(c => $"\"{c.ToLower()}\""));
+                var paramRows = pkValuesList.Select((row, rowIdx) =>
+                    $"({string.Join(", ", pkInfo.PrimaryKeyColumns.Select((_, colIdx) => $"@r{rowIdx}c{colIdx}"))})").ToList();
+
+                var query = $@"
+                    SELECT {colList} FROM ""{pgSchemaName}"".""{pgTableName}""
+                    WHERE ({colList}) IN (VALUES {string.Join(", ", paramRows)})";
+
+                using var command = new NpgsqlCommand(query, connection);
+                for (int rowIdx = 0; rowIdx < pkValuesList.Count; rowIdx++)
+                {
+                    var row = pkValuesList[rowIdx];
+                    for (int colIdx = 0; colIdx < pkInfo.PrimaryKeyColumns.Count; colIdx++)
+                    {
+                        var colName = pkInfo.PrimaryKeyColumns[colIdx];
+                        command.Parameters.AddWithValue($"@r{rowIdx}c{colIdx}", row.GetValueOrDefault(colName) ?? DBNull.Value);
+                    }
+                }
+
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    var key = string.Join("|", pkInfo.PrimaryKeyColumns.Select((_, i) => reader.GetValue(i)?.ToString() ?? "NULL"));
+                    found.Add(key);
+                }
+            }
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, $"Failed to check row existence in PostgreSQL {tableName}");
-            return false;
+            Log.Warning(ex, $"Failed bulk existence check in PostgreSQL {tableName}");
         }
+
+        return found;
+    }
+
+    public async Task<bool> RowExistsAsync(
+        string schemaName, 
+        string tableName, 
+        PrimaryKeyInfo pkInfo, 
+        Dictionary<string, object?> pkValues)
+    {
+        var result = await BulkRowExistsAsync(schemaName, tableName, pkInfo, new List<Dictionary<string, object?>> { pkValues });
+        return result.Count > 0;
     }
 }

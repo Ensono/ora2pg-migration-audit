@@ -9,7 +9,9 @@ public class DataTypeValidator
 
     public ValidationResult Validate(
         List<ColumnMetadata> oracleColumns,
-        List<ColumnMetadata> postgresColumns)
+        List<ColumnMetadata> postgresColumns,
+        string oracleSchema,
+        string postgresSchema)
     {
         _issues.Clear();
         
@@ -37,8 +39,8 @@ public class DataTypeValidator
 
         return new ValidationResult
         {
-            OracleSchema = oracleColumns.FirstOrDefault()?.SchemaName ?? "UNKNOWN",
-            PostgresSchema = postgresColumns.FirstOrDefault()?.SchemaName ?? "unknown",
+            OracleSchema = oracleSchema,
+            PostgresSchema = postgresSchema,
             Issues = _issues,
             TotalColumnsValidated = validated
         };
@@ -60,9 +62,20 @@ public class DataTypeValidator
         }
         else if (isCompatible)
         {
+            string? lengthNote = null;
+            if ((oracleType.Contains("VARCHAR") || oracleType.Contains("CHAR")) && 
+                oracle.CharLength.HasValue && postgres.CharLength.HasValue &&
+                postgres.CharLength > oracle.CharLength)
+            {
+                var expansion = ((double)(postgres.CharLength.Value - oracle.CharLength.Value) / oracle.CharLength.Value * 100);
+                lengthNote = $"Note: Column length expanded from {oracle.CharLength} to {postgres.CharLength} " +
+                            $"({expansion:F0}% increase). DMS applies this safety buffer to accommodate UTF-8 multi-byte " +
+                            "characters when converting from Oracle's byte-based semantics to PostgreSQL's character-based storage.";
+            }
+            
             AddIssue(oracle, postgres, ValidationSeverity.Info, "Valid Mapping",
                 $"{expectedMapping.MappingDescription} ✓",
-                null);
+                lengthNote);
         }
 
         ValidateNumericTypes(oracle, postgres, oracleType, postgresType);
@@ -254,7 +267,7 @@ public class DataTypeValidator
                 "Oracle pads with spaces; PostgreSQL doesn't.",
                 "Verify ETL logic handles space trimming correctly");
         }
-        else if (!baseType.StartsWith("character") && baseType != "char")
+        else if (!baseType.StartsWith("character") && baseType != "char" && baseType != "bpchar")
         {
             AddIssue(oracle, postgres, ValidationSeverity.Error, "Fixed-Length Type Mismatch",
                 $"CHAR should map to CHAR(n), not {postgresType.ToUpper()}.",
@@ -465,7 +478,8 @@ public class DataTypeValidator
 
         if (oracleType == "NVARCHAR2")
         {
-            if (!postgresType.StartsWith("character varying") && postgresType != "varchar" && postgresType != "text")
+            var baseType = ExtractBaseType(postgresType);
+            if (!baseType.StartsWith("character varying") && baseType != "varchar" && baseType != "text")
             {
                 AddIssue(oracle, postgres, ValidationSeverity.Error, "National String Type",
                     "Oracle NVARCHAR2 should map to VARCHAR or TEXT in PostgreSQL.",
@@ -481,7 +495,8 @@ public class DataTypeValidator
 
         if (oracleType == "NCHAR")
         {
-            if (!postgresType.StartsWith("character") && postgresType != "char")
+            // Check if postgres type is a valid CHAR type (character, char, bpchar - with optional length)
+            if (!postgresType.StartsWith("character") && !postgresType.StartsWith("char") && !postgresType.StartsWith("bpchar"))
             {
                 AddIssue(oracle, postgres, ValidationSeverity.Error, "National Fixed String",
                     "Oracle NCHAR should map to CHAR in PostgreSQL.",

@@ -8,16 +8,38 @@ public class DataValidationMarkdownWriter
 {
     private string _oracleDatabase = string.Empty;
     private string _postgresDatabase = string.Empty;
+    private string _oracleSchema = string.Empty;
+    private string _postgresSchema = string.Empty;
     
     public void WriteMarkdownReport(List<ComparisonResult> results, string outputPath)
     {
-        WriteMarkdownReport(results, outputPath, string.Empty, string.Empty);
+        WriteMarkdownReport(results, outputPath, string.Empty, string.Empty, string.Empty, string.Empty);
     }
     
     public void WriteMarkdownReport(List<ComparisonResult> results, string outputPath, string oracleDatabase, string postgresDatabase)
     {
+        WriteMarkdownReport(results, outputPath, oracleDatabase, postgresDatabase, string.Empty, string.Empty);
+    }
+
+    public void WriteMarkdownReport(List<ComparisonResult> results, string outputPath, string oracleDatabase, string postgresDatabase, string oracleSchema, string postgresSchema)
+    {
         _oracleDatabase = oracleDatabase;
         _postgresDatabase = postgresDatabase;
+        _oracleSchema = oracleSchema;
+        _postgresSchema = postgresSchema;
+        
+        // Try to extract schema from first result if not provided
+        if (string.IsNullOrEmpty(_oracleSchema) && results.Count > 0)
+        {
+            var parts = results[0].SourceTable.Split('.');
+            if (parts.Length > 1) _oracleSchema = parts[0];
+        }
+        if (string.IsNullOrEmpty(_postgresSchema) && results.Count > 0)
+        {
+            var parts = results[0].TargetTable.Split('.');
+            if (parts.Length > 1) _postgresSchema = parts[0];
+        }
+        
         var markdown = GenerateMarkdown(results);
         File.WriteAllText(outputPath, markdown);
     }
@@ -57,6 +79,14 @@ public class DataValidationMarkdownWriter
         if (!string.IsNullOrEmpty(_postgresDatabase))
         {
             sb.AppendLine($"- **PostgreSQL Database:** {_postgresDatabase}");
+        }
+        if (!string.IsNullOrEmpty(_oracleSchema))
+        {
+            sb.AppendLine($"- **Oracle Schema:** {_oracleSchema}");
+        }
+        if (!string.IsNullOrEmpty(_postgresSchema))
+        {
+            sb.AppendLine($"- **PostgreSQL Schema:** {_postgresSchema}");
         }
         
         sb.AppendLine($"- **Total Objects Compared:** {totalObjects} ({totalTables} tables, {totalViews} views)");

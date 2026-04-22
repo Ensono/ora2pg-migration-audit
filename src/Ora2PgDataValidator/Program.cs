@@ -6,6 +6,7 @@ using Ora2PgDataValidator.Writers;
 using Ora2PgDataValidator.Comparison;
 using Ora2Pg.Common.Util;
 using Ora2PgDataValidator.src;
+using System.Collections.Concurrent;
 
 namespace Ora2PgDataValidator;
 
@@ -317,10 +318,16 @@ class Program
                 schemaMappings.Sum(sm => sm.TableMapping.Count));
 
             var processorForAll = new ComparisonDatabaseProcessor(connectionManager);
-            var allSchemaResults = new List<DataValidatorSummary>();
+            var allSchemaResults = new ConcurrentBag<DataValidatorSummary>();
+            
+            // Check if parallel schema processing is enabled
+            var parallelSchemas = props.GetInt("PARALLEL_SCHEMAS", 1);
+            var processInParallel = parallelSchemas > 1 && schemaMappings.Count > 1;
             
             Log.Information("");
-            Log.Information("About to process {Count} schema mappings:", schemaMappings.Count);
+            Log.Information("About to process {Count} schema mappings{Mode}:", 
+                schemaMappings.Count,
+                processInParallel ? $" in parallel (max {parallelSchemas} concurrent)" : " sequentially");
             for (int idx = 0; idx < schemaMappings.Count; idx++)
             {
                 Log.Information("  [{Index}] {Oracle} → {Postgres} ({Tables} tables)",
@@ -328,44 +335,97 @@ class Program
                     schemaMappings[idx].TableMapping.Count);
             }
             
-            foreach (var (oracleSchema, postgresSchema, schemaTableMapping) in schemaMappings)
+            if (processInParallel)
             {
-                Log.Information("");
-                Log.Information("═══════════════════════════════════════════════════════════");
-                Log.Information("  Processing Schema: {OracleSchema} → {PostgresSchema}", oracleSchema, postgresSchema);
-                Log.Information("  Table count: {Count}", schemaTableMapping.Count);
-                Log.Information("═══════════════════════════════════════════════════════════");
+                // Process schemas in parallel
+                var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = parallelSchemas };
                 
-                if (schemaTableMapping.Count == 0)
+                Parallel.ForEach(schemaMappings, parallelOptions, mapping =>
                 {
-                    Log.Warning("⚠️  Schema {Schema} has no common tables - skipping validation but adding to summary", oracleSchema);
+                    var (oracleSchema, postgresSchema, schemaTableMapping) = mapping;
+                    
+                    Log.Information("");
+                    Log.Information("[Schema {Schema}] ═══════════════════════════════════════════════════════════", oracleSchema);
+                    Log.Information("[Schema {Schema}]   Processing: {OracleSchema} → {PostgresSchema}", oracleSchema, oracleSchema, postgresSchema);
+                    Log.Information("[Schema {Schema}]   Table count: {Count}", oracleSchema, schemaTableMapping.Count);
+                    
+                    if (schemaTableMapping.Count == 0)
+                    {
+                        Log.Warning("[Schema {Schema}] ⚠️  No common tables - skipping validation", oracleSchema);
+                        allSchemaResults.Add(new DataValidatorSummary
+                        {
+                            OracleSchema = oracleSchema,
+                            PostgresSchema = postgresSchema,
+                            TotalTables = 0,
+                            SuccessfulValidations = 0,
+                            FailedValidations = 0,
+                            Results = new List<ComparisonResult>()
+                        });
+                        return;
+                    }
+                    
+                    var schemaProcessor = new ComparisonDatabaseProcessor(connectionManager);
+                    var (results, successCount, failCount) = schemaProcessor.ProcessAndCompareTables(schemaTableMapping, oracleSchema);
+                    
                     allSchemaResults.Add(new DataValidatorSummary
                     {
                         OracleSchema = oracleSchema,
                         PostgresSchema = postgresSchema,
-                        TotalTables = 0,
-                        SuccessfulValidations = 0,
-                        FailedValidations = 0,
-                        Results = new List<ComparisonResult>()
+                        TotalTables = schemaTableMapping.Count,
+                        SuccessfulValidations = successCount,
+                        FailedValidations = failCount,
+                        Results = results
                     });
-                    continue;
-                }
-                
-                var (results, successCount, failCount) = processorForAll.ProcessAndCompareTables(schemaTableMapping, oracleSchema);
-                
-                allSchemaResults.Add(new DataValidatorSummary
-                {
-                    OracleSchema = oracleSchema,
-                    PostgresSchema = postgresSchema,
-                    TotalTables = schemaTableMapping.Count,
-                    SuccessfulValidations = successCount,
-                    FailedValidations = failCount,
-                    Results = results
+                    
+                    Log.Information("[Schema {Schema}] ✓ Completed - {Success} success, {Fail} failed", 
+                        oracleSchema, successCount, failCount);
                 });
-                
-                Log.Information("✓ Added result for {Schema}. Total results so far: {Count}", 
-                    oracleSchema, allSchemaResults.Count);
             }
+            else
+            {
+                // Process schemas sequentially (original behavior)
+                foreach (var (oracleSchema, postgresSchema, schemaTableMapping) in schemaMappings)
+                {
+                    Log.Information("");
+                    Log.Information("═══════════════════════════════════════════════════════════");
+                    Log.Information("  Processing Schema: {OracleSchema} → {PostgresSchema}", oracleSchema, postgresSchema);
+                    Log.Information("  Table count: {Count}", schemaTableMapping.Count);
+                    Log.Information("═══════════════════════════════════════════════════════════");
+                    
+                    if (schemaTableMapping.Count == 0)
+                    {
+                        Log.Warning("⚠️  Schema {Schema} has no common tables - skipping validation but adding to summary", oracleSchema);
+                        allSchemaResults.Add(new DataValidatorSummary
+                        {
+                            OracleSchema = oracleSchema,
+                            PostgresSchema = postgresSchema,
+                            TotalTables = 0,
+                            SuccessfulValidations = 0,
+                            FailedValidations = 0,
+                            Results = new List<ComparisonResult>()
+                        });
+                        continue;
+                    }
+                    
+                    var (results, successCount, failCount) = processorForAll.ProcessAndCompareTables(schemaTableMapping, oracleSchema);
+                    
+                    allSchemaResults.Add(new DataValidatorSummary
+                    {
+                        OracleSchema = oracleSchema,
+                        PostgresSchema = postgresSchema,
+                        TotalTables = schemaTableMapping.Count,
+                        SuccessfulValidations = successCount,
+                        FailedValidations = failCount,
+                        Results = results
+                    });
+                    
+                    Log.Information("✓ Added result for {Schema}. Total results so far: {Count}", 
+                        oracleSchema, allSchemaResults.Count);
+                }
+            }
+            
+            // Convert ConcurrentBag to List for summary report
+            var allSchemaResultsList = allSchemaResults.ToList();
             
             if (schemaMappings.Count > 1)
             {
@@ -374,11 +434,11 @@ class Program
                 Log.Information("  Multi-Schema Validation Summary");
                 Log.Information("═══════════════════════════════════════════════════════════");
                 Log.Information("Total schema pairs validated: {Count}", schemaMappings.Count);
-                Log.Information("Total results collected for summary: {Count}", allSchemaResults.Count);
+                Log.Information("Total results collected for summary: {Count}", allSchemaResultsList.Count);
                 
-                for (int i = 0; i < allSchemaResults.Count; i++)
+                for (int i = 0; i < allSchemaResultsList.Count; i++)
                 {
-                    var r = allSchemaResults[i];
+                    var r = allSchemaResultsList[i];
                     Log.Information("  [{Index}] {Oracle} → {Postgres} - {Tables} tables, {Success} success, {Fail} failed",
                         i, r.OracleSchema ?? "(null)", r.PostgresSchema ?? "(null)", 
                         r.TotalTables, r.SuccessfulValidations, r.FailedValidations);
@@ -388,7 +448,7 @@ class Program
                 var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
                 var reportsDir = props.GetReportsDirectory("Ora2PgDataValidator");
                 var summaryWriter = new MultiSchemaSummaryWriter();
-                summaryWriter.WriteSummaryReport(allSchemaResults, reportsDir, timestamp);
+                summaryWriter.WriteSummaryReport(allSchemaResultsList, reportsDir, timestamp);
             }
 
             connectionManager.Dispose();

@@ -1,4 +1,5 @@
 using Ora2PgDataTypeValidator.Models;
+using Serilog;
 
 namespace Ora2PgDataTypeValidator.Validators;
 
@@ -136,9 +137,13 @@ public static class TypeMappingRules
         var normalizedActual = NormalizePostgresType(actualType);
         var normalizedExpected = NormalizePostgresType(expected.ExpectedType);
 
+        Log.Debug("Type comparison for {Table}.{Column}: Oracle={OracleType}, Expected={ExpectedType} (normalized={NormalizedExpected}), Actual={ActualType} (normalized={NormalizedActual})",
+            oracleColumn.TableName, oracleColumn.ColumnName, oracleColumn.DataType, expected.ExpectedType, normalizedExpected, actualType, normalizedActual);
+
         if (!TypesAreCompatible(normalizedExpected, normalizedActual))
         {
             mismatchReason = $"Expected {expected.ExpectedType.ToUpper()}, got {actualType.ToUpper()}";
+            Log.Debug("Type mismatch: {Reason}", mismatchReason);
             return false;
         }
 
@@ -172,8 +177,33 @@ public static class TypeMappingRules
         {
             if (expected.ExpectedLength.HasValue && expected.ExpectedLength != postgresColumn.CharLength)
             {
-                mismatchReason = $"Length mismatch: expected {expected.ExpectedLength}, got {postgresColumn.CharLength}";
-                return false;
+                var oracleLength = oracleColumn.CharLength ?? expected.ExpectedLength;
+                var pgLength = postgresColumn.CharLength ?? 0;
+                
+                var maxExpectedLength = oracleLength.HasValue ? (int)Math.Ceiling(oracleLength.Value * 1.34) : 0;
+                
+                if (pgLength < oracleLength)
+                {
+                    mismatchReason = $"Length mismatch: Oracle has {oracleLength}, PostgreSQL has {pgLength} - TRUNCATION RISK!";
+                    Log.Debug("Length check failed for {Table}.{Column}: Oracle={OracleLength}, PostgreSQL={PgLength} (SMALLER)",
+                        oracleColumn.TableName, oracleColumn.ColumnName, oracleLength, pgLength);
+                    return false;
+                }
+                else if (pgLength > maxExpectedLength)
+                {
+                    Log.Debug("Length expansion for {Table}.{Column}: Oracle={OracleLength}, PostgreSQL={PgLength} (expanded for UTF-8 safety)",
+                        oracleColumn.TableName, oracleColumn.ColumnName, oracleLength, pgLength);
+                }
+                else
+                {
+                    Log.Debug("Length check passed for {Table}.{Column}: Oracle={OracleLength}, PostgreSQL={PgLength} (UTF-8 safe expansion)",
+                        oracleColumn.TableName, oracleColumn.ColumnName, oracleLength, pgLength);
+                }
+            }
+            else
+            {
+                Log.Debug("Length check passed for {Table}.{Column}: ExpectedLength={ExpectedLength}, ActualLength={ActualLength}",
+                    oracleColumn.TableName, oracleColumn.ColumnName, expected.ExpectedLength, postgresColumn.CharLength);
             }
         }
 
@@ -191,6 +221,7 @@ public static class TypeMappingRules
         {
             "varchar" => "character varying",
             "char" when !baseType.Contains("character") => "character",
+            "bpchar" => "character",  // bpchar is PostgreSQL's internal name for fixed-length character type
             "int" => "integer",
             "int2" => "smallint",
             "int4" => "integer",
@@ -222,10 +253,14 @@ public static class TypeMappingRules
         if (expectedBase == "varchar" && (actualBase == "character varying" || actualBase.StartsWith("varchar")))
             return true;
         
-        if (expectedBase == "character" && (actualBase.StartsWith("character") && !actualBase.Contains("varying") || actualBase == "char"))
+        if (expectedBase == "character" && (actualBase.StartsWith("character") && !actualBase.Contains("varying") || actualBase == "char" || actualBase == "bpchar"))
             return true;
         
-        if (expectedBase == "char" && (actualBase == "character" || actualBase.StartsWith("char")))
+        if (expectedBase == "char" && (actualBase == "character" || actualBase.StartsWith("char") || actualBase == "bpchar"))
+            return true;
+        
+        // bpchar is PostgreSQL's internal name for fixed-length CHAR type
+        if (expectedBase == "bpchar" && (actualBase == "character" || actualBase == "char" || actualBase == "bpchar"))
             return true;
         
         if (expectedBase == "numeric" && (actualBase.StartsWith("numeric") || actualBase.StartsWith("decimal")))

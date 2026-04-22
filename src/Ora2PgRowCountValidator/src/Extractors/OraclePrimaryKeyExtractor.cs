@@ -117,44 +117,96 @@ public class OraclePrimaryKeyExtractor
     }
 
 
-    public async Task<bool> RowExistsAsync(
-        string schemaName, 
-        string tableName, 
-        PrimaryKeyInfo pkInfo, 
-        Dictionary<string, object?> pkValues)
+    public async Task<HashSet<string>> BulkRowExistsAsync(
+        string schemaName,
+        string tableName,
+        PrimaryKeyInfo pkInfo,
+        List<Dictionary<string, object?>> pkValuesList)
     {
-        if (!pkInfo.HasPrimaryKey) return false;
+        var found = new HashSet<string>();
+        if (!pkInfo.HasPrimaryKey || pkValuesList.Count == 0) return found;
 
         try
         {
             using var connection = new OracleConnection(_connectionString);
             await connection.OpenAsync();
 
-            var whereConditions = pkInfo.PrimaryKeyColumns
-                .Select((col, idx) => $"{col} = :pk{idx}")
-                .ToList();
-
-            var query = $@"
-                SELECT COUNT(*)
-                FROM {schemaName}.{tableName}
-                WHERE {string.Join(" AND ", whereConditions)}";
-
-            using var command = new OracleCommand(query, connection);
-            
-            for (int i = 0; i < pkInfo.PrimaryKeyColumns.Count; i++)
+            if (pkInfo.PrimaryKeyColumns.Count == 1)
             {
-                var columnName = pkInfo.PrimaryKeyColumns[i];
-                var value = pkValues.GetValueOrDefault(columnName);
-                command.Parameters.Add($":pk{i}", value ?? DBNull.Value);
+                var col = pkInfo.PrimaryKeyColumns[0];
+                var values = pkValuesList.Select(r => r.GetValueOrDefault(col)).ToList();
+                
+                foreach (var chunk in values.Chunk(999))
+                {
+                    var paramNames = chunk.Select((_, i) => $":p{i}").ToList();
+                    var query = $"SELECT {col} FROM {schemaName}.{tableName} WHERE {col} IN ({string.Join(",", paramNames)})";
+                    
+                    using var command = new OracleCommand(query, connection);
+                    for (int i = 0; i < chunk.Length; i++)
+                        command.Parameters.Add($":p{i}", chunk[i] ?? DBNull.Value);
+                    
+                    using var reader = await command.ExecuteReaderAsync();
+                    while (await reader.ReadAsync())
+                        found.Add(reader.GetValue(0)?.ToString() ?? "NULL");
+                }
             }
+            else
+            {
+                var cols = pkInfo.PrimaryKeyColumns;
 
-            var count = Convert.ToInt64(await command.ExecuteScalarAsync());
-            return count > 0;
+                foreach (var chunk in pkValuesList.Chunk(500))
+                {
+                    var unionRows = chunk.Select((row, rowIdx) =>
+                    {
+                        var selectCols = cols.Select((col, colIdx) => $":r{rowIdx}c{colIdx} AS \"{col}\"");
+                        return $"SELECT {string.Join(", ", selectCols)} FROM DUAL";
+                    });
+
+                    var joinConditions = cols.Select(col => $"t.\"{col}\" = v.\"{col}\"");
+
+                    var selectCols2 = cols.Select(col => $"t.\"{col}\"");
+                    var query = $"SELECT {string.Join(", ", selectCols2)} " +
+                                $"FROM {schemaName}.{tableName} t " +
+                                $"JOIN ({string.Join(" UNION ALL ", unionRows)}) v " +
+                                $"ON {string.Join(" AND ", joinConditions)}";
+
+                    using var command = new OracleCommand(query, connection);
+                    command.FetchSize = command.FetchSize * 2;
+
+                    for (int rowIdx = 0; rowIdx < chunk.Length; rowIdx++)
+                    {
+                        var row = chunk[rowIdx];
+                        for (int colIdx = 0; colIdx < cols.Count; colIdx++)
+                        {
+                            var colName = cols[colIdx];
+                            command.Parameters.Add($":r{rowIdx}c{colIdx}", row.GetValueOrDefault(colName) ?? DBNull.Value);
+                        }
+                    }
+
+                    using var reader = await command.ExecuteReaderAsync();
+                    while (await reader.ReadAsync())
+                    {
+                        var key = string.Join("|", cols.Select((col, i) => reader.IsDBNull(i) ? "NULL" : reader.GetValue(i)?.ToString() ?? "NULL"));
+                        found.Add(key);
+                    }
+                }
+            }
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, $"Failed to check row existence in Oracle {tableName}");
-            return false;
+            Log.Warning(ex, $"Failed bulk existence check in Oracle {tableName}");
         }
+
+        return found;
+    }
+
+    public async Task<bool> RowExistsAsync(
+        string schemaName, 
+        string tableName, 
+        PrimaryKeyInfo pkInfo, 
+        Dictionary<string, object?> pkValues)
+    {
+        var result = await BulkRowExistsAsync(schemaName, tableName, pkInfo, new List<Dictionary<string, object?>> { pkValues });
+        return result.Count > 0;
     }
 }

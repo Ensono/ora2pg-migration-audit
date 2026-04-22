@@ -15,6 +15,7 @@ public class ConstraintDefinition
     public string? OnUpdateRule { get; set; }
     public bool? IsDeferrable { get; set; }
     public bool? IsInitiallyDeferred { get; set; }
+    public bool IsEnabled { get; set; } = true;
 
     public string? CheckCondition { get; set; }
     
