@@ -19,3 +19,8 @@ src/*/reports/
 
 # macOS system files
 .DS_Store
+
+# Distribution build output (generated binaries)
+dist/*/output/
+dist/row-count-validator/output/
+
