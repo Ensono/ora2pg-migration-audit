@@ -196,18 +196,40 @@ public class ApplicationProperties
 
     public string GetReportsDirectory(string validatorName)
     {
+        var outputDir = Get("OUTPUT_DIR");
+        if (!string.IsNullOrWhiteSpace(outputDir))
+        {
+            var baseDir = Path.IsPathRooted(outputDir)
+                ? outputDir
+                : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, outputDir));
+            var reportsDir = Path.Combine(baseDir, "reports");
+            Directory.CreateDirectory(reportsDir);
+            return reportsDir;
+        }
+
         var solutionRoot = GetSolutionRoot();
         var validatorDir = Path.Combine(solutionRoot, "src", validatorName);
-        var reportsDir = Path.Combine(validatorDir, "reports");
-        Directory.CreateDirectory(reportsDir);
-        return reportsDir;
+        var fallbackDir = Path.Combine(validatorDir, "reports");
+        Directory.CreateDirectory(fallbackDir);
+        return fallbackDir;
     }
 
     public string GetReportsDirectory()
     {
+        var outputDir = Get("OUTPUT_DIR");
+        if (!string.IsNullOrWhiteSpace(outputDir))
+        {
+            var baseDir = Path.IsPathRooted(outputDir)
+                ? outputDir
+                : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, outputDir));
+            var reportsDir = Path.Combine(baseDir, "reports");
+            Directory.CreateDirectory(reportsDir);
+            return reportsDir;
+        }
+
         var solutionRoot = GetSolutionRoot();
-        var reportsDir = Path.Combine(solutionRoot, "reports");
-        Directory.CreateDirectory(reportsDir);
-        return reportsDir;
+        var fallbackDir = Path.Combine(solutionRoot, "reports");
+        Directory.CreateDirectory(fallbackDir);
+        return fallbackDir;
     }
 }
