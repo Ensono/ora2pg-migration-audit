@@ -71,13 +71,13 @@ A timestamped report file is also saved (e.g. `row-count-report-20260422-103045.
 
 ## Common Settings
 
-| Setting | Default | What it does |
-|---|---|---|
-| `TABLES_TO_COMPARE` | `ALL` | Set to `ALL` or list specific tables |
+| Setting | Default   | What it does                          |
+|---|-----------|---------------------------------------|
+| `TABLES_TO_COMPARE` | `ALL`     | Set to `ALL` or list specific tables  |
 | `TABLE_EXCLUSION_PATTERNS` | _(empty)_ | Skip tables matching these substrings |
-| `PARALLEL_TABLES` | `4` | How many tables to count at once |
-| `COMMAND_TIMEOUT_SECONDS` | `600` | Timeout per query (10 min) |
-| `DETAILED_ROW_COMPARISON` | `true` | Show exactly which rows are missing |
+| `PARALLEL_TABLES` | `4`       | How many tables to count at once      |
+| `COMMAND_TIMEOUT_SECONDS` | `1800`    | Timeout per query (30 min)            |
+| `DETAILED_ROW_COMPARISON` | `true`    | Show exactly which rows are missing   |
 
 Full list of settings is in the `.env` file with comments.
 

@@ -57,13 +57,13 @@ Copy-Item "$ScriptDir\README.md"     "$OutDir\README.md"
 
 # Rename executable to a friendly name
 if ($Rid -like "win-*") {
-    $src = "$OutDir\Ora2PgRowCountValidator.exe"
-    $dst = "$OutDir\row-count-validator.exe"
+    $src = Join-Path $OutDir "Ora2PgRowCountValidator.exe"
+    $dst = Join-Path $OutDir "row-count-validator.exe"
 } else {
-    $src = "$OutDir\Ora2PgRowCountValidator"
-    $dst = "$OutDir\row-count-validator"
+    $src = Join-Path $OutDir "Ora2PgRowCountValidator"
+    $dst = Join-Path $OutDir "row-count-validator"
 }
-if (Test-Path $src) { Rename-Item $src $dst }
+if (Test-Path $src) { Rename-Item -Path $src -NewName (Split-Path $dst -Leaf) }
 
 Write-Host ""
 Write-Host "✅ Done! Package ready at: $OutDir" -ForegroundColor Green
