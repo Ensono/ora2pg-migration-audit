@@ -152,33 +152,41 @@ public class OraclePrimaryKeyExtractor
             }
             else
             {
-                var unionParts = pkValuesList.Select((row, rowIdx) =>
-                {
-                    var conditions = pkInfo.PrimaryKeyColumns
-                        .Select((col, colIdx) => $"{col} = :r{rowIdx}c{colIdx}")
-                        .ToList();
-                    return $"SELECT 1 FROM {schemaName}.{tableName} WHERE {string.Join(" AND ", conditions)} AND ROWNUM=1";
-                }).ToList();
+                var cols = pkInfo.PrimaryKeyColumns;
 
-                for (int rowIdx = 0; rowIdx < pkValuesList.Count; rowIdx++)
+                foreach (var chunk in pkValuesList.Chunk(500))
                 {
-                    var row = pkValuesList[rowIdx];
-                    var conditions = pkInfo.PrimaryKeyColumns
-                        .Select((col, colIdx) => $"{col} = :r{rowIdx}c{colIdx}")
-                        .ToList();
-                    var query = $"SELECT COUNT(*) FROM {schemaName}.{tableName} WHERE {string.Join(" AND ", conditions)} AND ROWNUM=1";
+                    var unionRows = chunk.Select((row, rowIdx) =>
+                    {
+                        var selectCols = cols.Select((col, colIdx) => $":r{rowIdx}c{colIdx} AS \"{col}\"");
+                        return $"SELECT {string.Join(", ", selectCols)} FROM DUAL";
+                    });
+
+                    var joinConditions = cols.Select(col => $"t.\"{col}\" = v.\"{col}\"");
+
+                    var selectCols2 = cols.Select(col => $"t.\"{col}\"");
+                    var query = $"SELECT {string.Join(", ", selectCols2)} " +
+                                $"FROM {schemaName}.{tableName} t " +
+                                $"JOIN ({string.Join(" UNION ALL ", unionRows)}) v " +
+                                $"ON {string.Join(" AND ", joinConditions)}";
 
                     using var command = new OracleCommand(query, connection);
-                    for (int colIdx = 0; colIdx < pkInfo.PrimaryKeyColumns.Count; colIdx++)
+                    command.FetchSize = command.FetchSize * 2;
+
+                    for (int rowIdx = 0; rowIdx < chunk.Length; rowIdx++)
                     {
-                        var colName = pkInfo.PrimaryKeyColumns[colIdx];
-                        command.Parameters.Add($":r{rowIdx}c{colIdx}", row.GetValueOrDefault(colName) ?? DBNull.Value);
+                        var row = chunk[rowIdx];
+                        for (int colIdx = 0; colIdx < cols.Count; colIdx++)
+                        {
+                            var colName = cols[colIdx];
+                            command.Parameters.Add($":r{rowIdx}c{colIdx}", row.GetValueOrDefault(colName) ?? DBNull.Value);
+                        }
                     }
 
-                    var count = Convert.ToInt64(await command.ExecuteScalarAsync());
-                    if (count > 0)
+                    using var reader = await command.ExecuteReaderAsync();
+                    while (await reader.ReadAsync())
                     {
-                        var key = string.Join("|", pkInfo.PrimaryKeyColumns.Select(col => row.GetValueOrDefault(col)?.ToString() ?? "NULL"));
+                        var key = string.Join("|", cols.Select((col, i) => reader.IsDBNull(i) ? "NULL" : reader.GetValue(i)?.ToString() ?? "NULL"));
                         found.Add(key);
                     }
                 }

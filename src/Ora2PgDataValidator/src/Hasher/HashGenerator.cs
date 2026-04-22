@@ -11,11 +11,16 @@ public static class HashGenerator
 {
     private static readonly bool _skipBlobColumns;
 
-    // When DEBUG_ROWS=N is set, log the pre-hash string value of every column
-    // for the first N rows processed. Useful for diagnosing hash mismatches.
+    // When DEBUG_ROWS=N is set, log structural debug info (column names + types) for the first N rows.
     // Optionally restrict to a specific table with DEBUG_TABLE=<tablename>.
+    // Actual row values are NEVER written to the main log to avoid leaking sensitive data.
+    // Set DEBUG_LOG_ROW_VALUES=true to write actual values to a separate dedicated file
+    // (debug-row-values-<date>.log) with an explicit security warning.
     private static readonly int _debugRows;
     private static readonly string _debugTable;
+    private static readonly bool _logRowValues;
+    private static readonly string? _rowValuesFilePath;
+    private static readonly object _rowValuesFileLock = new();
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _debugCounters = new();
 
     static HashGenerator()
@@ -28,12 +33,29 @@ public static class HashGenerator
 
         _debugRows  = props.GetInt("DEBUG_ROWS", 0);
         _debugTable = props.Get("DEBUG_TABLE", "").Trim();
+        _logRowValues = props.Get("DEBUG_LOG_ROW_VALUES", "false")
+                             .Equals("true", StringComparison.OrdinalIgnoreCase);
 
         if (_debugRows > 0)
         {
-            Log.Warning("HashGenerator debug mode ON — will log pre-hash values for first {N} rows{Filter}",
-                _debugRows,
-                string.IsNullOrEmpty(_debugTable) ? "" : $" of table '{_debugTable}'");
+            if (_logRowValues)
+            {
+                string fileName = $"debug-row-values-{DateTime.UtcNow:yyyyMMdd-HHmmss}.log";
+                _rowValuesFilePath = Path.Combine(AppContext.BaseDirectory, fileName);
+                Log.Warning("HashGenerator debug mode ON — actual row values will be written to '{FilePath}'. " +
+                            "⚠ This file may contain SENSITIVE DATA. Do not share or commit it.",
+                    _rowValuesFilePath);
+                File.WriteAllText(_rowValuesFilePath,
+                    $"# DEBUG ROW VALUES — generated {DateTime.UtcNow:u}\n" +
+                    $"# ⚠ SENSITIVE: contains actual database values. Do not share or commit.\n\n");
+            }
+            else
+            {
+                Log.Warning("HashGenerator debug mode ON — will log column structure (names/types) for first {N} rows{Filter}. " +
+                            "Actual values are suppressed. Set DEBUG_LOG_ROW_VALUES=true to enable value logging to a separate file.",
+                    _debugRows,
+                    string.IsNullOrEmpty(_debugTable) ? "" : $" of table '{_debugTable}'");
+            }
         }
     }
     
@@ -72,9 +94,26 @@ public static class HashGenerator
             int logged = _debugCounters.AddOrUpdate(counterKey, 1, (_, v) => v + 1);
             if (logged <= _debugRows)
             {
-                Log.Information("[DEBUG_ROWS] Table={Table} Row={Row} PreHashString={PreHash}",
-                    tableHint ?? "?", logged, input);
-                Log.Information("[DEBUG_ROWS] Columns: {Cols}", string.Join(" | ", debugParts));
+                var columnStructure = debugParts.Select(p =>
+                {
+                    int eq = p.LastIndexOf('=');
+                    return eq >= 0 ? p[..eq] : p;
+                });
+                Log.Information("[DEBUG_ROWS] Table={Table} Row={Row} Columns(names+types): {Cols}",
+                    tableHint ?? "?", logged, string.Join(" | ", columnStructure));
+
+                if (_logRowValues && _rowValuesFilePath != null)
+                {
+                    var lines = new System.Text.StringBuilder();
+                    lines.AppendLine($"[Row {logged}] Table={tableHint ?? "?"} PreHashString={input}");
+                    lines.AppendLine($"  Columns: {string.Join(" | ", debugParts)}");
+                    lines.AppendLine();
+
+                    lock (_rowValuesFileLock)
+                    {
+                        File.AppendAllText(_rowValuesFilePath, lines.ToString());
+                    }
+                }
             }
         }
 

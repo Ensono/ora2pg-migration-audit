@@ -18,6 +18,7 @@ public class DataExtractor
     private readonly int _lobSizeLimit;
     private readonly int _extraOrderColumns;  // Additional columns to add for retry logic
     private readonly int _maxOrderByColumns;  // Hard cap on ORDER BY columns to avoid temp_file_limit
+    private readonly TimeZoneInfo _oracleTz;  // Timezone for TIMESTAMP WITH TIME ZONE conversion (configurable via ORACLE_TIMEZONE)
 
     private readonly Dictionary<string, TableMetadata> _metadataCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -116,6 +117,24 @@ public class DataExtractor
 
         _maxOrderByColumns = props.GetInt("MAX_ORDER_BY_COLUMNS", 6);
         Log.Information("Max ORDER BY columns capped at {Max} (set MAX_ORDER_BY_COLUMNS to change)", _maxOrderByColumns);
+
+        // Configurable timezone for Oracle TIMESTAMP WITH TIME ZONE columns.
+        // Oracle drivers return these as plain DateTime (no offset), so we need to know
+        // the source database timezone to convert to UTC for comparison with PostgreSQL.
+        // Default: America/New_York (Eastern). Set ORACLE_TIMEZONE in .env to override.
+        string oracleTzId = props.Get("ORACLE_TIMEZONE", "");
+        if (string.IsNullOrWhiteSpace(oracleTzId))
+            oracleTzId = OperatingSystem.IsWindows() ? "Eastern Standard Time" : "America/New_York";
+        try
+        {
+            _oracleTz = TimeZoneInfo.FindSystemTimeZoneById(oracleTzId);
+            Log.Information("Oracle TIMESTAMP WITH TIME ZONE will be converted from '{TimeZone}' to UTC (set ORACLE_TIMEZONE to change)", oracleTzId);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            Log.Warning("ORACLE_TIMEZONE='{TimeZone}' not found on this system; falling back to UTC (no conversion).", oracleTzId);
+            _oracleTz = TimeZoneInfo.Utc;
+        }
     }
 
 
@@ -691,12 +710,6 @@ public class DataExtractor
     }
 
 
-    private static readonly TimeZoneInfo _easternTz =
-        TimeZoneInfo.FindSystemTimeZoneById(
-            OperatingSystem.IsWindows()
-                ? "Eastern Standard Time"
-                : "America/New_York");
-
     private static bool IsTimestampWithTimeZoneType(string columnTypeUpper) =>
         columnTypeUpper.Contains("WITH TIME ZONE") ||
         columnTypeUpper.Contains("WITH LOCAL TIME ZONE");
@@ -746,7 +759,7 @@ public class DataExtractor
                             {
                                 row[i] = TimeZoneInfo.ConvertTimeToUtc(
                                     DateTime.SpecifyKind(oracleDt, DateTimeKind.Unspecified),
-                                    _easternTz);
+                                    _oracleTz);
                             }
                             catch (Exception ex)
                             {
@@ -1036,8 +1049,9 @@ public class DataExtractor
             
             return string.Join(", ", columnExpressions);
         }
-        
-        return "*";
+
+        var columns = metadata.Columns.Select(c => QuoteIdentifier(c.Name));
+        return string.Join(", ", columns);
     }
 
     private string BuildFinalQuery(string tableReference, string columnList, string orderByClause,

@@ -17,7 +17,7 @@ public class OracleSchemaExtractor
     private readonly DatabaseConnectionManager _connectionManager;
     private readonly HashSet<string> _columnsToSkip;
     private readonly ObjectFilter _objectFilter;
-    private readonly bool _enableParallelExtraction;
+    private readonly int _parallelObjects;
 
     public OracleSchemaExtractor(DatabaseConnectionManager connectionManager)
     {
@@ -29,8 +29,9 @@ public class OracleSchemaExtractor
             skipColumnsEnv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             StringComparer.OrdinalIgnoreCase
         );
-        
-        _enableParallelExtraction = ApplicationProperties.Instance.GetInt("PARALLEL_TABLES", 4) > 1;
+
+        var parallelTables = ApplicationProperties.Instance.GetInt("PARALLEL_TABLES", 4);
+        _parallelObjects = ApplicationProperties.Instance.GetInt("PARALLEL_OBJECTS", parallelTables);
 
         if (_columnsToSkip.Any())
         {
@@ -52,13 +53,12 @@ public class OracleSchemaExtractor
         schema.Partitions = ExtractPartitionMetadata(schemaName);
         AttachPartitionMetadata(schema);
 
-        if (_enableParallelExtraction)
+        if (_parallelObjects > 1)
         {
-            _logger.Information("Extracting schema objects in parallel...");
-            
-            var tasks = new List<Task>();
+            _logger.Information("Extracting schema objects in parallel (max {Parallelism} concurrent)...", _parallelObjects);
+
             var errors = new ConcurrentBag<string>();
-            
+
             List<ConstraintDefinition>? constraints = null;
             List<IndexDefinition>? indexes = null;
             List<SequenceDefinition>? sequences = null;
@@ -66,49 +66,29 @@ public class OracleSchemaExtractor
             List<TriggerDefinition>? triggers = null;
             List<ProcedureDefinition>? procedures = null;
 
-            tasks.Add(Task.Run(() => {
-                try { constraints = ExtractConstraints(schemaName); }
-                catch (Exception ex) { errors.Add($"Constraints: {ex.Message}"); constraints = new List<ConstraintDefinition>(); }
-            }));
+            var extractors = new List<Action>
+            {
+                () => { try { constraints  = ExtractConstraints(schemaName);  } catch (Exception ex) { errors.Add($"Constraints: {ex.Message}");  constraints  = new List<ConstraintDefinition>();  } },
+                () => { try { indexes      = ExtractIndexes(schemaName);      } catch (Exception ex) { errors.Add($"Indexes: {ex.Message}");       indexes      = new List<IndexDefinition>();       } },
+                () => { try { sequences    = ExtractSequences(schemaName);    } catch (Exception ex) { errors.Add($"Sequences: {ex.Message}");     sequences    = new List<SequenceDefinition>();    } },
+                () => { try { views        = ExtractViews(schemaName);        } catch (Exception ex) { errors.Add($"Views: {ex.Message}");         views        = new List<ViewDefinition>();        } },
+                () => { try { triggers     = ExtractTriggers(schemaName);     } catch (Exception ex) { errors.Add($"Triggers: {ex.Message}");      triggers     = new List<TriggerDefinition>();     } },
+                () => { try { procedures   = ExtractProcedures(schemaName);   } catch (Exception ex) { errors.Add($"Procedures: {ex.Message}");    procedures   = new List<ProcedureDefinition>();   } },
+            };
 
-            tasks.Add(Task.Run(() => {
-                try { indexes = ExtractIndexes(schemaName); }
-                catch (Exception ex) { errors.Add($"Indexes: {ex.Message}"); indexes = new List<IndexDefinition>(); }
-            }));
-
-            tasks.Add(Task.Run(() => {
-                try { sequences = ExtractSequences(schemaName); }
-                catch (Exception ex) { errors.Add($"Sequences: {ex.Message}"); sequences = new List<SequenceDefinition>(); }
-            }));
-
-            tasks.Add(Task.Run(() => {
-                try { views = ExtractViews(schemaName); }
-                catch (Exception ex) { errors.Add($"Views: {ex.Message}"); views = new List<ViewDefinition>(); }
-            }));
-
-            tasks.Add(Task.Run(() => {
-                try { triggers = ExtractTriggers(schemaName); }
-                catch (Exception ex) { errors.Add($"Triggers: {ex.Message}"); triggers = new List<TriggerDefinition>(); }
-            }));
-
-            tasks.Add(Task.Run(() => {
-                try { procedures = ExtractProcedures(schemaName); }
-                catch (Exception ex) { errors.Add($"Procedures: {ex.Message}"); procedures = new List<ProcedureDefinition>(); }
-            }));
-
-            Task.WaitAll(tasks.ToArray());
+            Parallel.ForEach(extractors,
+                new ParallelOptions { MaxDegreeOfParallelism = _parallelObjects },
+                action => action());
 
             schema.Constraints = constraints!;
-            schema.Indexes = indexes!;
-            schema.Sequences = sequences!;
-            schema.Views = views!;
-            schema.Triggers = triggers!;
-            schema.Procedures = procedures!;
-            
+            schema.Indexes      = indexes!;
+            schema.Sequences    = sequences!;
+            schema.Views        = views!;
+            schema.Triggers     = triggers!;
+            schema.Procedures   = procedures!;
+
             foreach (var error in errors)
-            {
                 schema.ExtractionErrors.Add(error);
-            }
         }
         else
         {
