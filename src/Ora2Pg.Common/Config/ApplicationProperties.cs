@@ -38,17 +38,28 @@ public class ApplicationProperties
 
         string? envFilePath = null;
 
-        var solutionDir = FindSolutionRoot(currentDir);
-        if (solutionDir != null)
+        var exeDir = AppContext.BaseDirectory;
+        var exeEnvPath = Path.Combine(exeDir, ".env");
+        if (File.Exists(exeEnvPath))
         {
-            var solutionEnvPath = Path.Combine(solutionDir, ".env");
-            if (File.Exists(solutionEnvPath))
+            envFilePath = exeEnvPath;
+            _logger.Information("Found .env next to executable: {ExeDir}", exeDir);
+        }
+
+        if (envFilePath == null)
+        {
+            var solutionDir = FindSolutionRoot(currentDir);
+            if (solutionDir != null)
             {
-                envFilePath = solutionEnvPath;
-                _logger.Information("Found shared .env at solution root: {SolutionDir}", solutionDir);
+                var solutionEnvPath = Path.Combine(solutionDir, ".env");
+                if (File.Exists(solutionEnvPath))
+                {
+                    envFilePath = solutionEnvPath;
+                    _logger.Information("Found shared .env at solution root: {SolutionDir}", solutionDir);
+                }
             }
         }
-        
+
         if (envFilePath == null)
         {
             var projectEnvPath = Path.Combine(currentDir, ".env");
