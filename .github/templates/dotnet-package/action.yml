@@ -1,0 +1,70 @@
+name: Publish Self-Contained Package
+description: Publishes a self-contained single-file executable and zips it for delivery
+inputs:
+  project-path:
+    description: Path to the .csproj file to publish (relative to repo root)
+    required: true
+  rid:
+    description: .NET runtime identifier (e.g. win-x64, linux-x64, osx-arm64)
+    required: true
+  artifact-name:
+    description: Base name for the output artifact and zip file
+    required: true
+  version:
+    description: Version string to embed in the artifact name
+    required: true
+  support-files-dir:
+    description: Directory containing .env.template and README.md to bundle
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Publish
+      shell: bash
+      run: |
+        OUT="output/${{ inputs.rid }}"
+        mkdir -p "$OUT"
+
+        dotnet publish "${{ inputs.project-path }}" \
+          -c Release \
+          -r "${{ inputs.rid }}" \
+          --self-contained true \
+          -p:PublishSingleFile=true \
+          -p:IncludeNativeLibrariesForSelfExtract=true \
+          -p:EnableCompressionInSingleFile=true \
+          -o "$OUT"
+
+        # Remove dev-only files
+        rm -f "$OUT"/*.pdb "$OUT"/*.xml
+
+        # Bundle support files
+        cp "${{ inputs.support-files-dir }}/.env.template" "$OUT/.env"
+        cp "${{ inputs.support-files-dir }}/README.md"     "$OUT/README.md"
+
+        # Rename executable
+        EXEC_NAME="${{ inputs.artifact-name }}"
+        if [[ "${{ inputs.rid }}" == win-* ]]; then
+          mv "$OUT/$(basename ${{ inputs.project-path }} .csproj).exe" "$OUT/${EXEC_NAME}.exe" 2>/dev/null || true
+        else
+          mv "$OUT/$(basename ${{ inputs.project-path }} .csproj)" "$OUT/${EXEC_NAME}" 2>/dev/null || true
+          chmod +x "$OUT/${EXEC_NAME}"
+        fi
+
+        echo "=== Package contents ==="
+        ls -lh "$OUT"
+
+    - name: Zip package
+      shell: bash
+      run: |
+        OUT="output/${{ inputs.rid }}"
+        ZIP="${{ inputs.artifact-name }}-${{ inputs.version }}-${{ inputs.rid }}.zip"
+        cd "$OUT" && zip -r "../../${ZIP}" . && cd -
+        echo "ZIP=${ZIP}" >> $GITHUB_ENV
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}-${{ inputs.version }}-${{ inputs.rid }}
+        path: ${{ env.ZIP }}
+        retention-days: 30

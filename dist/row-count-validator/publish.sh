@@ -12,7 +12,7 @@
 # Output:
 #   ./output/<rid>/row-count-validator[.exe]
 #   ./output/<rid>/.env.template
-#   ./output/<rid>/README-BAU.md
+#   ./output/<rid>/README.md
 #
 # Requirements:
 #   - .NET 9 SDK installed (https://dot.net)
@@ -47,11 +47,11 @@ dotnet publish "$PROJECT" \
   -p:EnableCompressionInSingleFile=true \
   -o "$OUT_DIR"
 
-# Remove dev artifacts that BAU doesn't need
+# Remove dev artifacts not needed in the package
 rm -f "$OUT_DIR"/*.pdb
 rm -f "$OUT_DIR"/*.xml
 
-# Copy BAU support files
+# Copy support files
 cp "$SCRIPT_DIR/.env.template"  "$OUT_DIR/.env"
 cp "$SCRIPT_DIR/README.md"      "$OUT_DIR/README.md"
 
