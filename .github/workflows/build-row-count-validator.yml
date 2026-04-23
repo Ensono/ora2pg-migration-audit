@@ -1,0 +1,129 @@
+name: build-row-count-validator
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/templates/dotnet-build/action.yml
+      - .github/templates/dotnet-package/action.yml
+      - .github/workflows/build-row-count-validator.yml
+      - src/Ora2PgRowCountValidator/**
+      - src/Ora2Pg.Common/**
+      - dist/row-count-validator/.env.template
+      - dist/row-count-validator/README.md
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/templates/dotnet-build/action.yml
+      - .github/templates/dotnet-package/action.yml
+      - .github/workflows/build-row-count-validator.yml
+      - src/Ora2PgRowCountValidator/**
+      - src/Ora2Pg.Common/**
+      - dist/row-count-validator/.env.template
+      - dist/row-count-validator/README.md
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+permissions:
+  id-token: write
+  contents: write
+  checks: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Build and Test
+        uses: ./.github/templates/dotnet-build
+
+      - name: Publish test reports
+        if: hashFiles('**/results.xml') != ''
+        uses: dorny/test-reporter@v2
+        with:
+          name: 'Test Results'
+          path: '**/TestResults/results.xml'
+          reporter: java-junit
+          fail-on-error: true
+
+  package:
+    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [win-x64, linux-x64, osx-arm64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Install MinVer CLI
+        shell: sh
+        run: dotnet tool install --global minver-cli
+
+      - name: Tag release on main push
+        # Create the version tag BEFORE MinVer runs so the artifact gets a clean version number.
+        # On PR builds this step is skipped; MinVer produces a pre-release version instead.
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push' && matrix.rid == 'win-x64'
+        shell: bash
+        run: |
+          # Find the latest rcv-v tag; default to rcv-v0.0.0 if none exists
+          LATEST=$(git tag --list 'rcv-v*' --sort=-version:refname | head -1)
+          if [ -z "$LATEST" ]; then
+            LATEST="rcv-v0.0.0"
+          fi
+
+          # Strip prefix and split into parts
+          VERSION="${LATEST#rcv-v}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+
+          # Increment minor, reset patch
+          NEW_TAG="rcv-v${MAJOR}.$((MINOR + 1)).0"
+
+          echo "Latest tag : $LATEST"
+          echo "New tag    : $NEW_TAG"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$NEW_TAG"
+          git push origin "$NEW_TAG"
+
+      - name: Read MinVer version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(minver --tag-prefix rcv-v)
+          # On pull_request builds append run number and attempt so successive PR builds
+          # produce distinct artifact names.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            VERSION="${VERSION}-${{ github.run_number }}.${{ github.run_attempt }}"
+          fi
+          echo "Resolved version: ${VERSION}"
+          echo "value=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Package (${{ matrix.rid }})
+        uses: ./.github/templates/dotnet-package
+        with:
+          project-path: src/Ora2PgRowCountValidator/Ora2PgRowCountValidator.csproj
+          rid: ${{ matrix.rid }}
+          artifact-name: row-count-validator
+          version: ${{ steps.version.outputs.value }}
+          support-files-dir: dist/row-count-validator

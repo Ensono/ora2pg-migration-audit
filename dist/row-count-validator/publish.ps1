@@ -47,11 +47,11 @@ dotnet publish $Project `
     -p:EnableCompressionInSingleFile=true `
     -o $OutDir
 
-# Remove dev artifacts that BAU doesn't need
+# Remove dev artifacts not needed in the package
 Get-ChildItem "$OutDir\*.pdb" -ErrorAction SilentlyContinue | Remove-Item -Force
 Get-ChildItem "$OutDir\*.xml" -ErrorAction SilentlyContinue | Remove-Item -Force
 
-# Copy BAU support files
+# Copy support files
 Copy-Item "$ScriptDir\.env.template" "$OutDir\.env"
 Copy-Item "$ScriptDir\README.md"     "$OutDir\README.md"
 
